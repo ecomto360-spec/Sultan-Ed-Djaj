@@ -1,0 +1,6 @@
+{
+  "name": "Sultan Ed-Djaj",
+  "description": "App de commande pour le rôtisseur de poulet Sultan Ed-Djaj (سلطان الدجاج) – Spécialité Poulet Braisé et Rôti, Birkhadem Alger. Double vue Client & Commercial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
