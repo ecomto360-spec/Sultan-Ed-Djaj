@@ -55,7 +55,7 @@ export const CommercialClients: React.FC = () => {
 
       {/* Clients Table */}
       <div className="flex-1 overflow-auto rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-inner">
-        <table className={`w-full text-xs border-collapse ${isArabic ? 'text-right' : 'text-left'}`}>
+        <table className={`w-full min-w-[600px] text-xs border-collapse ${isArabic ? 'text-right' : 'text-left'}`}>
           <thead className="sticky top-0 bg-[#16161a] border-b border-zinc-800 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
             <tr>
               <th className="p-3">{t.clientNameCol}</th>

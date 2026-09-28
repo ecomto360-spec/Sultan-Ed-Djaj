@@ -19,6 +19,7 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
   const [commune, setCommune] = useState('Birkhadem');
   const [address, setAddress] = useState('');
   const [landmark, setLandmark] = useState('');
+  const [mapUrl, setMapUrl] = useState('');
   const [kitchenNotes, setKitchenNotes] = useState('');
 
   // Selected item quantities
@@ -73,6 +74,7 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
               commune: commune.trim() || 'Birkhadem',
               address: address.trim(),
               landmark: landmark.trim() || undefined,
+              mapUrl: mapUrl.trim() || undefined,
             }
           : undefined,
       kitchenNotes: kitchenNotes.trim() || undefined,
@@ -82,10 +84,10 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <PlusCircle className="w-5 h-5 text-orange-400" />
             <h3 className="text-sm font-bold text-white">
@@ -94,14 +96,14 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-zinc-400 hover:text-white"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 text-xs">
           {errorMsg && (
             <div className="p-2.5 bg-red-950/60 border border-red-500/40 text-red-300 rounded-xl">
               {errorMsg}
@@ -199,6 +201,16 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
                     onChange={e => setLandmark(e.target.value)}
                     placeholder={isArabic ? 'مثال: بجانب الصيدلية' : 'Ex: À côté de...'}
                     className="w-full bg-zinc-900 rounded-lg p-1.5 text-white border border-zinc-700"
+                  />
+                </div>
+                <div className="md:col-span-3">
+                  <label className="text-[10px] text-zinc-400">{isArabic ? 'رابط خريطة GPS / Google Maps (اختياري)' : 'Lien Google Maps / GPS (optionnel)'}</label>
+                  <input
+                    type="url"
+                    value={mapUrl}
+                    onChange={e => setMapUrl(e.target.value)}
+                    placeholder="https://maps.google.com/?q=..."
+                    className="w-full bg-zinc-900 rounded-lg p-1.5 text-white border border-zinc-700 font-mono text-[11px]"
                   />
                 </div>
               </div>

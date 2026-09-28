@@ -2,6 +2,7 @@ import {
   Product,
   Customer,
   Order,
+  StatusLog,
   StoreSettings,
   StockItem,
   ProductComposition,
@@ -818,10 +819,10 @@ export function generateHistoricalData(): {
 
       const orderNumber = `#SD-${String(orderSeqCounter++).padStart(4, '0')}`;
 
-      const history = [
-        { status: 'pending' as const, timestamp: orderIso },
+      const history: StatusLog[] = [
+        { status: 'pending', timestamp: orderIso },
         {
-          status: 'preparing' as const,
+          status: 'preparing',
           timestamp: new Date(orderTime.getTime() + 5 * 60000).toISOString(),
         },
       ];
@@ -979,17 +980,20 @@ export function generateHistoricalData(): {
 export const INITIAL_SETTINGS: StoreSettings = {
   isOpen: true,
   manualOverride: false,
-  openTime: '13:00',
-  closeTime: '00:00',
+  openTime: '00:00',
+  closeTime: '23:59',
   deliveryFee: 200,
   estimatedPrepTimeMinutes: 25,
   phone: '+213 771 01 20 33',
-  address: 'Les Vergers, Birkhadem',
+  address: 'Les Vergers, Birkhadem (En face Technicum Lycée Zahoual)',
   city: 'Alger',
   soundEnabled: true,
   managerPin: '0000',
   dailyRevenueTarget: 25000,
   autoStockAvailability: true,
+  dailyChickenQuota: 100,
+  dailyChickenDate: new Date().toISOString().split('T')[0],
+  dailyChickenInitial: 100,
 };
 
 export const INITIAL_ORDERS: Order[] = TODAY_ORDERS;

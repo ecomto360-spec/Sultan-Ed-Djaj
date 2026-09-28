@@ -2,7 +2,19 @@ import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { OrderStatus } from '../../types';
-import { Clock, CheckCircle2, Phone, MapPin, ChefHat, Motorbike, Store, AlertCircle, ArrowRight } from 'lucide-react';
+import {
+  Clock,
+  CheckCircle2,
+  Phone,
+  MapPin,
+  ChefHat,
+  Motorbike,
+  Store,
+  AlertCircle,
+  ArrowRight,
+  Navigation,
+  ExternalLink,
+} from 'lucide-react';
 
 export const ClientTracking: React.FC = () => {
   const {
@@ -215,12 +227,29 @@ export const ClientTracking: React.FC = () => {
         )}
 
         {order.deliveryAddress && (
-          <div className="pt-2 border-t border-zinc-800 flex items-start gap-1.5 text-[11px] text-zinc-400">
-            <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
-            <span>
-              {order.deliveryAddress.address}, {order.deliveryAddress.commune}
-              {order.deliveryAddress.landmark ? ` (${order.deliveryAddress.landmark})` : ''}
-            </span>
+          <div className="pt-2 border-t border-zinc-800 space-y-1 text-[11px] text-zinc-400">
+            <div className="flex items-start gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
+              <span>
+                {order.deliveryAddress.address}, {order.deliveryAddress.commune}
+                {order.deliveryAddress.landmark ? ` (${order.deliveryAddress.landmark})` : ''}
+              </span>
+            </div>
+            {(order.deliveryAddress.mapUrl || (order.deliveryAddress.latitude && order.deliveryAddress.longitude)) && (
+              <a
+                href={
+                  order.deliveryAddress.mapUrl ||
+                  `https://maps.google.com/?q=${order.deliveryAddress.latitude},${order.deliveryAddress.longitude}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-400 hover:underline pt-0.5"
+              >
+                <Navigation className="w-3 h-3" />
+                <span>{isArabic ? 'عرض موقع التوصيل على الخريطة (GPS)' : 'Voir la localisation GPS sur Google Maps'}</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+            )}
           </div>
         )}
       </div>

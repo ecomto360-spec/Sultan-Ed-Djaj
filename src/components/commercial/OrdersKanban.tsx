@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Order, OrderStatus } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
@@ -14,6 +14,8 @@ import {
   XCircle,
   AlertTriangle,
   ArrowRight,
+  Navigation,
+  ExternalLink,
 } from 'lucide-react';
 
 interface OrdersKanbanProps {
@@ -33,6 +35,9 @@ export const OrdersKanban: React.FC<OrdersKanbanProps> = ({
   const t = TRANSLATIONS[language];
   const isArabic = language === 'ar';
   const isCook = userRole === 'cuisinier';
+
+  // Responsive column focus for mobile & tablet
+  const [selectedColumn, setSelectedColumn] = useState<OrderStatus | 'all'>('all');
 
   // Filter orders
   const filteredOrders = orders.filter(o => {
@@ -105,17 +110,64 @@ export const OrdersKanban: React.FC<OrdersKanbanProps> = ({
     return '';
   };
 
-  return (
-    <div className="flex-1 overflow-x-auto p-4 min-h-0">
-      <div className="flex items-start gap-4 min-w-[1100px] h-full">
-        {columns.map(col => {
-          const colOrders = filteredOrders.filter(o => o.status === col.status);
+  const displayedColumns = columns.filter(
+    c => selectedColumn === 'all' || c.status === selectedColumn
+  );
 
+  return (
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      {/* Mobile / Tablet Column Selector Pill Bar: wraps onto lines cleanly */}
+      <div className="lg:hidden px-3 py-2 flex flex-wrap items-center gap-1.5 shrink-0 bg-zinc-900/40 border-b border-zinc-800">
+        <button
+          onClick={() => setSelectedColumn('all')}
+          className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+            selectedColumn === 'all'
+              ? 'bg-orange-600 text-white shadow-sm'
+              : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          {isArabic ? 'الكل' : 'Toutes'} ({filteredOrders.length})
+        </button>
+        {columns.map(col => {
+          const count = filteredOrders.filter(o => o.status === col.status).length;
           return (
-            <div
+            <button
               key={col.status}
-              className={`flex-1 flex flex-col rounded-2xl border ${col.borderColor} ${col.bgColor} max-h-full overflow-hidden shadow-sm`}
+              onClick={() => setSelectedColumn(col.status)}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition ${
+                selectedColumn === col.status
+                  ? 'bg-orange-600 text-white shadow-sm'
+                  : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
             >
+              <span>{col.title}</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-zinc-900 font-extrabold text-zinc-300">
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Columns Container */}
+      <div className="flex-1 overflow-x-auto p-2.5 sm:p-4 min-h-0">
+        <div className={`flex items-stretch gap-3 sm:gap-4 h-full ${
+          selectedColumn === 'all'
+            ? 'min-w-[85vw] lg:min-w-0 w-full snap-x snap-mandatory'
+            : 'w-full'
+        }`}>
+          {displayedColumns.map(col => {
+            const colOrders = filteredOrders.filter(o => o.status === col.status);
+
+            return (
+              <div
+                key={col.status}
+                className={`flex flex-col rounded-2xl border ${col.borderColor} ${col.bgColor} max-h-full overflow-hidden shadow-sm shrink-0 snap-start ${
+                  selectedColumn === 'all'
+                    ? 'w-[88vw] sm:w-[340px] lg:w-auto lg:flex-1'
+                    : 'w-full flex-1'
+                }`}
+              >
               {/* Column Header */}
               <div className="p-3 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/80">
                 <div className="flex items-center gap-2">
@@ -208,12 +260,29 @@ export const OrdersKanban: React.FC<OrdersKanbanProps> = ({
                             </div>
 
                             {order.deliveryAddress && (
-                              <div className="flex items-start gap-1 text-[11px] text-zinc-400 leading-snug">
-                                <MapPin className="w-3 h-3 text-red-400 shrink-0 mt-0.5" />
-                                <span className="line-clamp-2">
-                                  {order.deliveryAddress.address}, {order.deliveryAddress.commune}
-                                  {order.deliveryAddress.landmark ? ` (${order.deliveryAddress.landmark})` : ''}
-                                </span>
+                              <div className="space-y-1">
+                                <div className="flex items-start gap-1 text-[11px] text-zinc-400 leading-snug">
+                                  <MapPin className="w-3 h-3 text-red-400 shrink-0 mt-0.5" />
+                                  <span className="line-clamp-2">
+                                    {order.deliveryAddress.address}, {order.deliveryAddress.commune}
+                                    {order.deliveryAddress.landmark ? ` (${order.deliveryAddress.landmark})` : ''}
+                                  </span>
+                                </div>
+                                {(order.deliveryAddress.mapUrl || (order.deliveryAddress.latitude && order.deliveryAddress.longitude)) && (
+                                  <a
+                                    href={
+                                      order.deliveryAddress.mapUrl ||
+                                      `https://maps.google.com/?q=${order.deliveryAddress.latitude},${order.deliveryAddress.longitude}`
+                                    }
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-bold bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20"
+                                  >
+                                    <Navigation className="w-2.5 h-2.5" />
+                                    <span>{isArabic ? 'خرائط GPS' : 'GPS Google Maps'}</span>
+                                    <ExternalLink className="w-2.5 h-2.5 opacity-75" />
+                                  </a>
+                                )}
                               </div>
                             )}
 
@@ -303,6 +372,7 @@ export const OrdersKanban: React.FC<OrdersKanbanProps> = ({
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

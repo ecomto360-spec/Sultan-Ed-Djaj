@@ -33,6 +33,7 @@ export const CommercialSettings: React.FC = () => {
   const [phone, setPhone] = useState(settings.phone);
   const [openTime, setOpenTime] = useState(settings.openTime);
   const [closeTime, setCloseTime] = useState(settings.closeTime);
+  const [dailyChickenQuota, setDailyChickenQuota] = useState(settings.dailyChickenQuota || 100);
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
@@ -45,6 +46,7 @@ export const CommercialSettings: React.FC = () => {
       phone,
       openTime,
       closeTime,
+      dailyChickenQuota: Math.max(0, Math.round(dailyChickenQuota)),
     });
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
@@ -156,7 +158,7 @@ export const CommercialSettings: React.FC = () => {
               </div>
             </div>
             <p className="text-[10px] text-zinc-400">
-              {isArabic ? 'ساعات عمل سلطان الدجاج: 13:00 إلى 00:00.' : 'Horaires de Sultan Ed-Djaj : 13h00 à 00h00.'}
+              {isArabic ? 'ساعات عمل سلطان الدجاج: 24 سا / 24 سا (7 أيام / 7).' : 'Horaires de Sultan Ed-Djaj : 24h / 24h (7j/7).'}
             </p>
           </div>
 
@@ -208,6 +210,27 @@ export const CommercialSettings: React.FC = () => {
             />
             <p className="text-[10px] text-zinc-400">
               {isArabic ? 'الرقم الرسمي: 33 20 01 771 213+' : 'Numéro officiel : +213 771 01 20 33.'}
+            </p>
+          </div>
+
+          {/* Daily Chicken Quota */}
+          <div className="space-y-1.5">
+            <label className="font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-sm">🍗</span>
+              <span>{isArabic ? 'حصة الدجاج اليومية التلقائية (عدد الدجاج/يوم)' : 'Quota quotidien automatique (nombre de poulets/jour)'}</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={dailyChickenQuota}
+              onChange={e => setDailyChickenQuota(Number(e.target.value))}
+              className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700 font-mono font-bold text-orange-400"
+            />
+            <p className="text-[10px] text-zinc-400">
+              {isArabic
+                ? 'يتم تجديد هذا العدد تلقائياً كل يوم عند بداية الخدمة (مثال: 100 دجاجة). هذا العدد لا يظهر للزبون.'
+                : 'Ce quota est réinitialisé automatiquement chaque jour (ex: 100 poulets). Ce nombre reste confidentiel et ne s\'affiche pas au client.'}
             </p>
           </div>
         </div>

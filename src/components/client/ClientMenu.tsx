@@ -14,6 +14,7 @@ export const ClientMenu: React.FC = () => {
     setClientTab,
     language,
     isStoreActuallyOpen,
+    dailyChickenRemaining,
   } = useApp();
 
   const t = TRANSLATIONS[language];
@@ -119,15 +120,15 @@ export const ClientMenu: React.FC = () => {
         )}
       </div>
 
-      {/* Category Chips */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+      {/* Category Chips: wraps onto 2 neat lines instead of horizontal scroll */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {categories.map(cat => {
           const isSelected = selectedCategory === cat.id;
           return (
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(cat.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                 isSelected
                   ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm ring-1 ring-orange-400/40'
                   : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-700/50'
@@ -139,11 +140,13 @@ export const ClientMenu: React.FC = () => {
         })}
       </div>
 
-      {/* 2-Column Product Grid */}
-      <div className="grid grid-cols-2 gap-2.5">
+      {/* Product Grid (2 cols on phone, 3 on tablet, 4 on wide screen) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3.5">
         {filteredProducts.map(product => {
           const qty = getQty(product.id);
-          const isAvailable = product.isAvailable;
+          const isChickenProduct = product.category === 'poulets' || product.id === 'prod-1' || product.id === 'prod-2';
+          const isChickenSoldOut = isChickenProduct && dailyChickenRemaining <= 0;
+          const isAvailable = product.isAvailable && !isChickenSoldOut;
 
           return (
             <div
@@ -166,7 +169,11 @@ export const ClientMenu: React.FC = () => {
                       : 'bg-red-950/80 text-red-300 border-red-500/30'
                   }`}
                 >
-                  {isAvailable ? t.available : t.outOfStock}
+                  {isAvailable
+                    ? t.available
+                    : isChickenSoldOut
+                    ? t.dailyChickenSoldOutToday
+                    : t.outOfStock}
                 </div>
               </div>
 
@@ -234,7 +241,11 @@ export const ClientMenu: React.FC = () => {
                   </div>
                 ) : (
                   <div className="w-full py-1 text-center text-[10px] font-semibold text-zinc-500 bg-zinc-800/40 rounded-lg">
-                    {!isStoreActuallyOpen ? t.storeClosed : t.outOfStock}
+                    {!isStoreActuallyOpen
+                      ? t.storeClosed
+                      : isChickenSoldOut
+                      ? t.dailyChickenSoldOutToday
+                      : t.outOfStock}
                   </div>
                 )}
               </div>

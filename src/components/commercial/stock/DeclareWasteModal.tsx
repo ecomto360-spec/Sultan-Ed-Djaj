@@ -41,16 +41,16 @@ export const DeclareWasteModal: React.FC<DeclareWasteModalProps> = ({ stockItem,
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fadeIn overflow-y-auto">
+      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-400 flex items-center justify-center border border-red-500/20">
               <Flame className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">{t.stockDeclareLoss}</h3>
+              <h3 className="text-sm font-bold text-white">{t.declareLossBtn}</h3>
               <p className="text-[11px] text-zinc-400">
                 {isArabic ? 'تسجيل فاقد أو تالف في المطبخ' : 'Déclaration de perte ou gaspillage'}
               </p>
@@ -65,10 +65,10 @@ export const DeclareWasteModal: React.FC<DeclareWasteModalProps> = ({ stockItem,
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-3.5 sm:p-4 space-y-4 overflow-y-auto flex-1">
           {/* Article selection */}
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-zinc-300">{t.stockItemName}</label>
+            <label className="text-xs font-semibold text-zinc-300">{t.colStockItem}</label>
             <select
               value={selectedItemId}
               onChange={e => setSelectedItemId(e.target.value)}
@@ -84,7 +84,7 @@ export const DeclareWasteModal: React.FC<DeclareWasteModalProps> = ({ stockItem,
 
           {/* Quantity */}
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-zinc-300">{t.stockMovementQty}</label>
+            <label className="text-xs font-semibold text-zinc-300">{t.colMovementQty}</label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
@@ -153,7 +153,7 @@ export const DeclareWasteModal: React.FC<DeclareWasteModalProps> = ({ stockItem,
               type="submit"
               className="px-5 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-500 text-white transition shadow-lg shadow-red-950/40"
             >
-              {t.stockDeclareLoss}
+              {t.declareLossBtn}
             </button>
           </div>
         </form>

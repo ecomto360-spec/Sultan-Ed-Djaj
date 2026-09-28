@@ -123,7 +123,7 @@ export const CommercialCatalog: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden p-4 space-y-4">
+    <div className="flex-1 flex flex-col overflow-hidden p-3 sm:p-4 space-y-3.5 sm:space-y-4">
       {/* Top action bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -135,17 +135,17 @@ export const CommercialCatalog: React.FC = () => {
 
         <button
           onClick={handleOpenAddModal}
-          className="h-9 px-4 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md"
+          className="h-9 px-4 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition"
         >
           <Plus className="w-4 h-4" />
           <span>{t.addProductBtn}</span>
         </button>
       </div>
 
-      {/* Filter and Search */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Filter and Search: wraps cleanly across lines on mobile */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
         {/* Search */}
-        <div className="relative flex-1 min-w-[220px] max-w-sm">
+        <div className="relative w-full sm:max-w-xs">
           <Search className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 ${isArabic ? 'right-3' : 'left-3'}`} />
           <input
             type="text"
@@ -159,14 +159,14 @@ export const CommercialCatalog: React.FC = () => {
         </div>
 
         {/* Category selector */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+        <div className="flex flex-wrap items-center gap-1.5 max-w-full">
           {categories.map(cat => (
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(cat.id)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                 selectedCategory === cat.id
-                  ? 'bg-orange-600 text-white'
+                  ? 'bg-orange-600 text-white shadow-sm'
                   : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-zinc-800'
               }`}
             >

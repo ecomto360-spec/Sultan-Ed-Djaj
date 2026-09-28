@@ -63,6 +63,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
         currentStock,
         alertThreshold,
         criticalThreshold,
+        idealStock: alertThreshold * 2 || 10,
         unitCostDA: isCook ? 0 : unitCostDA,
         supplierName: isCook ? '' : supplierName,
         supplierPhone: isCook ? '' : supplierPhone,
@@ -73,10 +74,10 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm animate-fadeIn overflow-y-auto">
+      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-orange-500/10 text-orange-400 flex items-center justify-center border border-orange-500/20">
               <Package className="w-5 h-5" />
@@ -105,7 +106,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="p-4 overflow-y-auto space-y-4 flex-1">
+        <form onSubmit={handleSubmit} className="p-3 sm:p-4 overflow-y-auto space-y-3.5 flex-1">
           {/* Names */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -153,7 +154,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-zinc-300">{t.stockItemUnit}</label>
+              <label className="text-xs font-semibold text-zinc-300">{t.stockUnit}</label>
               <input
                 type="text"
                 required
@@ -169,7 +170,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-zinc-300">
-                {t.stockCurrent}
+                {t.stockInitialQty}
               </label>
               <input
                 type="number"
@@ -183,7 +184,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
 
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-amber-400">
-                {t.stockAlert}
+                {t.stockAlertThreshold}
               </label>
               <input
                 type="number"
@@ -197,7 +198,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
 
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-red-400">
-                {t.stockCritical}
+                {t.stockCriticalThreshold}
               </label>
               <input
                 type="number"
@@ -215,7 +216,7 @@ export const StockItemEditModal: React.FC<StockItemEditModalProps> = ({ itemToEd
             {!isCook && (
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-zinc-300">
-                  {t.stockUnitCost} (DA)
+                  {t.stockCostDA} (DA)
                 </label>
                 <input
                   type="number"

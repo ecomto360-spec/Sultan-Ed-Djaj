@@ -24,6 +24,9 @@ export interface Customer {
   commune: string;
   address: string;
   landmark?: string;
+  mapUrl?: string;
+  latitude?: number;
+  longitude?: number;
   orderCount: number;
   totalSpent: number;
   createdAt: string;
@@ -64,6 +67,9 @@ export interface Order {
     commune: string;
     address: string;
     landmark?: string;
+    mapUrl?: string;
+    latitude?: number;
+    longitude?: number;
   };
   pickupTimeSlot?: string;
   kitchenNotes?: string;
@@ -90,6 +96,9 @@ export interface StoreSettings {
   managerPin: string; // e.g. "0000"
   dailyRevenueTarget: number; // e.g. 25000 DA
   autoStockAvailability: boolean; // dynamic out-of-stock when portions = 0
+  dailyChickenQuota: number; // Nombre de poulets prévus chaque jour (ex: 100)
+  dailyChickenDate: string; // Date du quota actif (YYYY-MM-DD)
+  dailyChickenInitial: number; // Quantité totale mise en cuisson/broche aujourd'hui (ex: 100)
 }
 
 // ══════════════════════════════════════════════════
@@ -98,13 +107,16 @@ export interface StoreSettings {
 
 export type StockCategory =
   | 'viandes'
+  | 'poulet'
   | 'legumes'
   | 'epicerie'
+  | 'epices_sauces'
   | 'boissons'
   | 'emballages'
-  | 'combustible';
+  | 'combustible'
+  | 'autre';
 
-export type StockUnit = 'piece' | 'kg' | 'L' | 'boite';
+export type StockUnit = 'piece' | 'kg' | 'L' | 'boite' | 'pièce' | string;
 
 export type AlertLevel = 'ok' | 'low' | 'critical' | 'out';
 
@@ -121,6 +133,7 @@ export interface StockItem {
   unitCostDA: number; // Coût unitaire en DA (visible Gérant seul)
   supplierName: string; // Nom fournisseur
   supplierPhone: string; // Tél fournisseur
+  location?: string; // Emplacement (Cuisine, Réserve, Chambre froide...)
   expiryDate?: string; // Date limite de consommation (DLC optionnelle)
   lastRestockedAt?: string;
 }
@@ -156,6 +169,7 @@ export interface PurchaseItem {
   stockItem: StockItem;
   neededQuantity: number;
   estimatedCost: number;
+  estimatedCostDA?: number;
 }
 
 export interface SupplierPurchaseGroup {
@@ -167,13 +181,16 @@ export interface SupplierPurchaseGroup {
 
 export interface InventoryDiscrepancy {
   stockItemId: string;
-  stockItemName: string;
+  stockItemName?: string;
+  nameFr?: string;
+  nameAr?: string;
   unit: StockUnit;
   theoreticalStock: number;
   countedStock: number;
   difference: number; // counted - theoretical
-  unitCostDA: number;
-  totalCostDifference: number; // difference * unitCostDA
+  unitCostDA?: number;
+  totalCostDifference?: number; // difference * unitCostDA
+  costDifferenceDA?: number;
 }
 
 // ══════════════════════════════════════════════════

@@ -38,9 +38,9 @@ export const ClientHeader: React.FC = () => {
 
       {/* Info Pills */}
       <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-zinc-400">
-        <div className="flex items-center gap-1 bg-zinc-900/80 px-2 py-0.5 rounded-md border border-zinc-800">
+        <div className="flex items-center gap-1 bg-zinc-900/80 px-2 py-0.5 rounded-md border border-zinc-800 text-amber-300 font-bold">
           <Clock className="w-3 h-3 text-amber-400 shrink-0" />
-          <span>{settings.openTime} – {settings.closeTime === '00:00' ? '00h' : settings.closeTime}</span>
+          <span>{isArabic ? '24 سا / 24 سا' : '24h / 24h (7j/7)'}</span>
         </div>
 
         <a
@@ -53,7 +53,9 @@ export const ClientHeader: React.FC = () => {
 
         <div className="flex items-center gap-1 bg-zinc-900/80 px-2 py-0.5 rounded-md border border-zinc-800">
           <MapPin className="w-3 h-3 text-red-400 shrink-0" />
-          <span>{isArabic ? 'البساتين، بئر خادم' : 'Les Vergers, Birkhadem'}</span>
+          <span title={isArabic ? 'البساتين، بئر خادم (مقابل تقنيك ثانوية زحوال)' : 'Les Vergers, Birkhadem (En face Technicum Lycée Zahoual)'}>
+            {isArabic ? 'البساتين • مقابل ثانوية زحوال' : 'Les Vergers • Face Technicum Zahoual'}
+          </span>
         </div>
       </div>
     </div>

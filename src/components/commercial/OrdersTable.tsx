@@ -168,7 +168,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
 
       {/* Table Container */}
       <div className="flex-1 overflow-auto rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-inner">
-        <table className={`w-full ${isArabic ? 'text-right' : 'text-left'} text-xs border-collapse`}>
+        <table className={`w-full min-w-[680px] ${isArabic ? 'text-right' : 'text-left'} text-xs border-collapse`}>
           <thead className="sticky top-0 bg-[#16161a] border-b border-zinc-800 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
             <tr>
               <th className="p-3">{isArabic ? 'رقم الطلب' : 'N° Commande'}</th>

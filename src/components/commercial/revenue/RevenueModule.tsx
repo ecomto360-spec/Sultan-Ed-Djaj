@@ -113,17 +113,14 @@ export const RevenueModule: React.FC = () => {
   // Calculate KPIs
   const kpis = useMemo(() => {
     return calculateRevenueKPIs(
-      filteredOrders,
-      filteredExpenses,
       orders,
       expenses,
-      period,
-      stockItems,
       compositions,
-      customStart,
-      customEnd
+      stockItems,
+      period,
+      period === 'custom' && customStart && customEnd ? { start: customStart, end: customEnd } : undefined
     );
-  }, [filteredOrders, filteredExpenses, orders, expenses, period, stockItems, compositions, customStart, customEnd]);
+  }, [orders, expenses, compositions, stockItems, period, customStart, customEnd]);
 
   // Daily target progress
   const dailyTarget = settings.dailyRevenueTarget || 25000;
@@ -173,12 +170,12 @@ export const RevenueModule: React.FC = () => {
   };
 
   const periods: { id: RevenuePeriod; label: string }[] = [
-    { id: 'today', label: t.revenuePeriodToday },
-    { id: 'yesterday', label: t.revenuePeriodYesterday },
-    { id: '7days', label: t.revenuePeriod7Days },
-    { id: '30days', label: t.revenuePeriod30Days },
-    { id: 'this_month', label: t.revenuePeriodMonth },
-    { id: 'custom', label: t.revenuePeriodCustom },
+    { id: 'today', label: t.periodToday },
+    { id: 'yesterday', label: t.periodYesterday },
+    { id: '7days', label: t.period7Days },
+    { id: '30days', label: t.period30Days },
+    { id: 'month', label: t.periodMonth },
+    { id: 'custom', label: t.periodCustom },
   ];
 
   return (
@@ -235,90 +232,92 @@ export const RevenueModule: React.FC = () => {
         </button>
       </div>
 
-      {/* Sub-Tabs Navigation */}
-      <div className="px-5 pt-3 border-b border-zinc-800 flex items-center justify-between bg-[#111114]">
-        <div className="flex items-center gap-2 overflow-x-auto pb-2">
-          <button
-            onClick={() => setActiveSubTab('overview')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-              activeSubTab === 'overview'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>{t.revenueTabOverview}</span>
-          </button>
+      {/* Sub-Tabs Navigation: wraps onto lines cleanly on mobile without horizontal scroll */}
+      <div className="px-3 sm:px-5 pt-3 border-b border-zinc-800 bg-[#111114]">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <button
+              onClick={() => setActiveSubTab('overview')}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition ${
+                activeSubTab === 'overview'
+                  ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                  : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>{isArabic ? 'نظرة عامة' : 'Vue d\'ensemble'}</span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('sales')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-              activeSubTab === 'sales'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
-            }`}
-          >
-            <ShoppingBag className="w-4 h-4" />
-            <span>{t.revenueTabSales}</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300">
-              {filteredOrders.length}
-            </span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('sales')}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition ${
+                activeSubTab === 'sales'
+                  ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                  : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
+              }`}
+            >
+              <ShoppingBag className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>{isArabic ? 'المبيعات' : 'Ventes'}</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300 font-mono">
+                {filteredOrders.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('expenses')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-              activeSubTab === 'expenses'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
-            }`}
-          >
-            <DollarSign className="w-4 h-4" />
-            <span>{t.revenueTabExpenses}</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300">
-              {filteredExpenses.length}
-            </span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('expenses')}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition ${
+                activeSubTab === 'expenses'
+                  ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                  : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
+              }`}
+            >
+              <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>{isArabic ? 'المصاريف' : 'Dépenses'}</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300 font-mono">
+                {filteredExpenses.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('closing')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-              activeSubTab === 'closing'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
-            }`}
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>{t.revenueTabCashClosing}</span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('closing')}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition ${
+                activeSubTab === 'closing'
+                  ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                  : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>{isArabic ? 'قفل الصندوق' : 'Clôture Caisse'}</span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('reports')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-              activeSubTab === 'reports'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
-            }`}
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>{t.revenueTabReports}</span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('reports')}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition ${
+                activeSubTab === 'reports'
+                  ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                  : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>{isArabic ? 'التقارير' : 'Rapports'}</span>
+            </button>
+          </div>
+
+          {/* Quick Add Expense Button */}
+          {activeSubTab === 'expenses' && (
+            <button
+              onClick={() => setShowExpenseModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition shadow-md shadow-red-950/40"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{t.addExpenseBtn}</span>
+            </button>
+          )}
         </div>
-
-        {/* Quick Add Expense Button */}
-        {activeSubTab === 'expenses' && (
-          <button
-            onClick={() => setShowExpenseModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition shadow-md shadow-red-950/40"
-          >
-            <Plus className="w-4 h-4" />
-            <span>{t.revenueAddExpense}</span>
-          </button>
-        )}
       </div>
 
       {/* Main SubTab Content */}
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5">
         {/* SUBTAB 1: OVERVIEW */}
         {activeSubTab === 'overview' && (
           <div className="space-y-6">
@@ -331,7 +330,7 @@ export const RevenueModule: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-white uppercase tracking-wider">
-                      {t.revenueDailyTarget}
+                      {t.kpiDailyTarget}
                     </span>
                     <span className="text-xs font-extrabold text-orange-400 font-mono">
                       {todayDeliveredRevenue.toLocaleString()} / {dailyTarget.toLocaleString()} DA
@@ -367,7 +366,7 @@ export const RevenueModule: React.FC = () => {
               {/* CA Réalisé */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-2 shadow-lg">
                 <div className="flex items-center justify-between text-zinc-400 text-xs">
-                  <span>{t.revenueDeliveredCA}</span>
+                  <span>{t.kpiCaRealise}</span>
                   <div className="w-7 h-7 rounded-lg bg-orange-500/10 text-orange-400 flex items-center justify-center">
                     <TrendingUp className="w-3.5 h-3.5" />
                   </div>
@@ -395,7 +394,7 @@ export const RevenueModule: React.FC = () => {
               {/* Commandes Livrées */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-2 shadow-lg">
                 <div className="flex items-center justify-between text-zinc-400 text-xs">
-                  <span>{t.revenueDeliveredOrders}</span>
+                  <span>{t.kpiOrdersDelivered}</span>
                   <div className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
                     <ShoppingBag className="w-3.5 h-3.5" />
                   </div>
@@ -417,7 +416,7 @@ export const RevenueModule: React.FC = () => {
               {/* Panier Moyen */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-2 shadow-lg">
                 <div className="flex items-center justify-between text-zinc-400 text-xs">
-                  <span>{t.revenueAvgBasket}</span>
+                  <span>{t.kpiAvgBasket}</span>
                   <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
                     <DollarSign className="w-3.5 h-3.5" />
                   </div>
@@ -434,7 +433,7 @@ export const RevenueModule: React.FC = () => {
               {/* Bénéfice Net Estimé */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-2 shadow-lg">
                 <div className="flex items-center justify-between text-zinc-400 text-xs">
-                  <span>{t.revenueNetProfit}</span>
+                  <span>{t.kpiNetProfit}</span>
                   <div className="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center">
                     <CreditCard className="w-3.5 h-3.5" />
                   </div>
@@ -463,7 +462,7 @@ export const RevenueModule: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h4 className="font-bold text-white text-sm">
-                      {t.revenueEvolutionDaily}
+                      {t.chartDailySales}
                     </h4>
                     <p className="text-xs text-zinc-500">
                       {isArabic ? 'تطور المداخيل اليومية والمصاريف' : 'Chiffre d\'affaires et dépenses par jour'}
@@ -524,7 +523,7 @@ export const RevenueModule: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h4 className="font-bold text-white text-sm">
-                      {t.revenueHourlyRushHours}
+                      {t.chartHourlyDistribution}
                     </h4>
                     <p className="text-xs text-zinc-500">
                       {isArabic
@@ -565,7 +564,7 @@ export const RevenueModule: React.FC = () => {
               {/* Delivery vs Pickup Pie */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-3 shadow-xl">
                 <h4 className="font-bold text-white text-sm">
-                  {t.revenueDeliveryVsPickup}
+                  {t.chartDeliveryVsPickup}
                 </h4>
                 <div className="h-56 w-full flex items-center justify-center">
                   <ResponsiveContainer width="100%" height="100%">
@@ -577,7 +576,7 @@ export const RevenueModule: React.FC = () => {
                         cx="50%"
                         cy="50%"
                         outerRadius={80}
-                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                        label={({ name, percent }) => `${name} (${(((percent as number) ?? 0) * 100).toFixed(0)}%)`}
                       >
                         {deliveryVsPickupChartData.map((_, index) => (
                           <Cell
@@ -601,7 +600,7 @@ export const RevenueModule: React.FC = () => {
 
               {/* Top Products */}
               <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-3 shadow-xl">
-                <h4 className="font-bold text-white text-sm">{t.revenueTopProducts}</h4>
+                <h4 className="font-bold text-white text-sm">{t.chartTopProducts}</h4>
                 <div className="space-y-2.5">
                   {topProductsChartData.map((p, idx) => (
                     <div
@@ -655,7 +654,7 @@ export const RevenueModule: React.FC = () => {
             {/* Sales Table */}
             <div className="bg-[#141418] border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full min-w-[650px] text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/60 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
                       <th className="py-3 px-4">Commande</th>
@@ -758,7 +757,7 @@ export const RevenueModule: React.FC = () => {
             {/* Expenses List */}
             <div className="bg-[#141418] border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full min-w-[650px] text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/60 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
                       <th className="py-3 px-4">Date</th>
@@ -814,7 +813,7 @@ export const RevenueModule: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-white">
-                      {t.closingServiceFormTitle}
+                      {t.cashClosingTitle}
                     </h3>
                     <p className="text-[11px] text-zinc-400">
                       {isArabic
@@ -837,7 +836,7 @@ export const RevenueModule: React.FC = () => {
                   {/* Theoretical */}
                   <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800 space-y-1">
                     <span className="text-[11px] text-zinc-400 font-semibold">
-                      {t.closingTheoreticalCash}
+                      {t.theoreticalCashLabel}
                     </span>
                     <div className="text-xl font-black text-amber-400 font-mono">
                       {closingTheoreticalCash.toLocaleString()} DA
@@ -847,7 +846,7 @@ export const RevenueModule: React.FC = () => {
                   {/* Counted Cash input */}
                   <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800 space-y-1">
                     <span className="text-[11px] text-zinc-400 font-semibold">
-                      {t.closingCountedCash} (DA)
+                      {t.countedCashLabel} (DA)
                     </span>
                     <input
                       type="number"
@@ -863,7 +862,7 @@ export const RevenueModule: React.FC = () => {
                   {/* Difference */}
                   <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800 space-y-1">
                     <span className="text-[11px] text-zinc-400 font-semibold">
-                      {t.closingDifference}
+                      {t.cashDifferenceLabel}
                     </span>
                     <div
                       className={`text-xl font-black font-mono ${
@@ -905,7 +904,7 @@ export const RevenueModule: React.FC = () => {
                     className="ml-auto px-6 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition shadow-lg shadow-orange-950/40 flex items-center gap-2"
                   >
                     <Lock className="w-4 h-4" />
-                    <span>{t.closingValidateAndLock}</span>
+                    <span>{t.closeCashRegisterBtn}</span>
                   </button>
                 </div>
               </form>
@@ -913,7 +912,7 @@ export const RevenueModule: React.FC = () => {
 
             {/* Historical Closings */}
             <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-4 space-y-3 shadow-xl max-w-4xl mx-auto">
-              <h4 className="font-bold text-white text-sm">{t.closingHistoryTitle}</h4>
+              <h4 className="font-bold text-white text-sm">{t.pastClosingsTitle}</h4>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -952,7 +951,7 @@ export const RevenueModule: React.FC = () => {
                         <td className="py-2.5 px-4 text-zinc-400">{c.closedBy}</td>
                         <td className="py-2.5 px-4">
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            {t.closingStatusLocked}
+                            {t.cashClosedLockedNotice}
                           </span>
                         </td>
                       </tr>
@@ -969,7 +968,7 @@ export const RevenueModule: React.FC = () => {
           <div className="space-y-4 max-w-3xl mx-auto">
             <div className="bg-[#141418] border border-zinc-800 rounded-2xl p-6 shadow-xl space-y-6">
               <div>
-                <h3 className="text-base font-bold text-white">{t.revenueExportTitle}</h3>
+                <h3 className="text-base font-bold text-white">{t.revenueTitle}</h3>
                 <p className="text-xs text-zinc-400">
                   {isArabic
                     ? 'تصدير البيانات المالية والمبيعات بصيغة CSV المتوافقة مع Excel'
@@ -993,7 +992,7 @@ export const RevenueModule: React.FC = () => {
                     className="w-full py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-md shadow-orange-950/40"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    <span>{t.revenueExportSalesCSV}</span>
+                    <span>{t.exportCsvSales}</span>
                   </button>
                 </div>
 
@@ -1012,7 +1011,7 @@ export const RevenueModule: React.FC = () => {
                     className="w-full py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition flex items-center justify-center gap-2 border border-zinc-700"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    <span>{t.revenueExportExpensesCSV}</span>
+                    <span>{t.exportCsvExpenses}</span>
                   </button>
                 </div>
               </div>

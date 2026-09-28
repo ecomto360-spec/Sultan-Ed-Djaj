@@ -98,6 +98,8 @@ interface AppContextType {
   setClientTab: (tab: 'menu' | 'cart' | 'tracking' | 'profile') => void;
   clientActiveOrder: Order | null;
   setClientActiveOrder: (ord: Order | null) => void;
+  clientSimulatorMode: 'frame' | 'fluid';
+  setClientSimulatorMode: (mode: 'frame' | 'fluid') => void;
 
   // Commercial state & Navigation
   backOfficeTab: BackOfficeTab;
@@ -106,10 +108,22 @@ interface AppContextType {
   setBackOfficeOrdersView: (v: 'kanban' | 'table') => void;
   unreadAlertCount: number;
   clearNewOrderAlert: (orderId: string) => void;
+  isMobileSidebarOpen: boolean;
+  setIsMobileSidebarOpen: (open: boolean) => void;
+  toggleMobileSidebar: () => void;
 
   // Cancellation modal prompt state
   cancelModalOrder: Order | null;
   setCancelModalOrder: (order: Order | null) => void;
+
+  // Daily Chicken Quota & Live Countdown
+  dailyChickenQuota: number;
+  dailyChickenInitial: number;
+  dailyChickenRemaining: number;
+  dailyChickenSold: number;
+  setDailyChickenQuota: (quota: number) => void;
+  setTodayChickenCount: (count: number, mode: 'set_initial' | 'set_remaining' | 'add') => void;
+  resetTodayChickenBatch: (newTotal?: number) => void;
 
   // Actions
   placeOrder: (params: {
@@ -119,6 +133,9 @@ interface AppContextType {
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
@@ -133,6 +150,9 @@ interface AppContextType {
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
@@ -163,6 +183,9 @@ interface AppContextType {
     commune: string;
     address: string;
     landmark?: string;
+    mapUrl?: string;
+    latitude?: number;
+    longitude?: number;
   }) => Customer;
   logoutCustomer: () => void;
 }
@@ -316,10 +339,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return (localStorage.getItem(STORAGE_KEYS.ROLE) as UserRole) || 'gerant';
   });
 
-  // Client tabs
+  // Client tabs & simulator mode
   const [clientTab, setClientTab] = useState<'menu' | 'cart' | 'tracking' | 'profile'>('menu');
+  const [clientSimulatorMode, setClientSimulatorMode] = useState<'frame' | 'fluid'>('frame');
   const [backOfficeTab, setBackOfficeTabState] = useState<BackOfficeTab>('orders');
   const [backOfficeOrdersView, setBackOfficeOrdersView] = useState<'kanban' | 'table'>('kanban');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  const toggleMobileSidebar = () => {
+    setIsMobileSidebarOpen(prev => !prev);
+  };
 
   // Cancel order with stock choice modal
   const [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null);
@@ -432,19 +461,168 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return active ? active.id : null;
   });
 
-  // Calculate actual store openness: 13h - 00h (Algiers local time) or manual override
+  // Calculate actual store openness: 24h / 24h (7j/7) or manual override
   const isStoreActuallyOpen = useMemo(() => {
     if (settings.manualOverride) {
       return settings.isOpen;
     }
-    const hour = new Date().getHours();
-    return hour >= 13 || hour === 0;
+    // Default 24h / 24h open
+    return true;
   }, [settings.manualOverride, settings.isOpen]);
 
   // Active stock alerts count
   const activeStockAlertsCount = useMemo(() => {
     return getActiveStockAlerts(stockItems).length;
   }, [stockItems]);
+
+  // ══════════════════════════════════════════════════
+  // DAILY CHICKEN QUOTA & LIVE REMAINING COUNTDOWN
+  // ══════════════════════════════════════════════════
+  const dailyChickenQuota = settings.dailyChickenQuota || 100;
+  const dailyChickenInitial = settings.dailyChickenInitial ?? dailyChickenQuota;
+
+  // Calculate chickens ordered / sold today (from non-cancelled orders today)
+  const dailyChickenSold = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayOrders = orders.filter(
+      o => o.createdAt.startsWith(today) && o.status !== 'cancelled'
+    );
+    let count = 0;
+    todayOrders.forEach(o => {
+      o.items.forEach(it => {
+        if (it.productId === 'prod-1' || it.productId === 'prod-2') {
+          count += it.quantity;
+        } else {
+          const comp = compositions.find(c => c.productId === it.productId);
+          const chickenIng = comp?.ingredients.find(ing => ing.stockItemId === 'stock-1');
+          if (chickenIng) {
+            count += chickenIng.quantity * it.quantity;
+          }
+        }
+      });
+    });
+    return Math.round(count * 10) / 10;
+  }, [orders, compositions]);
+
+  // Total chicken waste declared today
+  const dailyChickenWasted = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayWastes = stockMovements.filter(
+      m => m.stockItemId === 'stock-1' && m.type === 'waste' && m.timestamp.startsWith(today)
+    );
+    return todayWastes.reduce((sum, m) => sum + Math.abs(m.quantity), 0);
+  }, [stockMovements]);
+
+  // Live remaining chicken count
+  const dailyChickenRemaining = Math.max(
+    0,
+    Math.round((dailyChickenInitial - dailyChickenSold - dailyChickenWasted) * 10) / 10
+  );
+
+  // Automatic Daily Reset: whenever the calendar day changes, reset quota to dailyChickenQuota
+  useEffect(() => {
+    const checkDateRollover = () => {
+      const today = new Date().toISOString().split('T')[0];
+      if (settings.dailyChickenDate && settings.dailyChickenDate !== today) {
+        const defaultQuota = settings.dailyChickenQuota || 100;
+        setSettings(prev => ({
+          ...prev,
+          dailyChickenDate: today,
+          dailyChickenInitial: defaultQuota,
+        }));
+        setStockItems(prev =>
+          prev.map(s =>
+            s.id === 'stock-1'
+              ? { ...s, currentStock: defaultQuota, lastRestockedAt: new Date().toISOString() }
+              : s
+          )
+        );
+      }
+    };
+
+    checkDateRollover();
+    const timer = setInterval(checkDateRollover, 60000);
+    return () => clearInterval(timer);
+  }, [settings.dailyChickenDate, settings.dailyChickenQuota]);
+
+  // Synchronize stock-1 (Poulet entier) currentStock with dailyChickenRemaining
+  useEffect(() => {
+    setStockItems(prev => {
+      const chickenItem = prev.find(s => s.id === 'stock-1');
+      if (chickenItem && Math.abs(chickenItem.currentStock - dailyChickenRemaining) > 0.01) {
+        return prev.map(s => (s.id === 'stock-1' ? { ...s, currentStock: dailyChickenRemaining } : s));
+      }
+      return prev;
+    });
+  }, [dailyChickenRemaining]);
+
+  // Helper actions for daily chicken quota
+  const setDailyChickenQuota = (quota: number) => {
+    const valid = Math.max(0, Math.round(quota));
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenQuota: valid,
+    }));
+  };
+
+  const setTodayChickenCount = (
+    count: number,
+    mode: 'set_initial' | 'set_remaining' | 'add'
+  ) => {
+    const today = new Date().toISOString().split('T')[0];
+    const val = Math.max(0, Math.round(count));
+
+    if (mode === 'set_initial') {
+      setSettings(prev => ({
+        ...prev,
+        dailyChickenDate: today,
+        dailyChickenInitial: val,
+      }));
+    } else if (mode === 'set_remaining') {
+      const newInitial = val + dailyChickenSold + dailyChickenWasted;
+      setSettings(prev => ({
+        ...prev,
+        dailyChickenDate: today,
+        dailyChickenInitial: newInitial,
+      }));
+    } else if (mode === 'add') {
+      const currentInit = settings.dailyChickenInitial ?? (settings.dailyChickenQuota || 100);
+      const newInitial = currentInit + val;
+      setSettings(prev => ({
+        ...prev,
+        dailyChickenDate: today,
+        dailyChickenInitial: newInitial,
+      }));
+
+      // Log stock movement
+      const nowIso = new Date().toISOString();
+      setStockMovements(prev => [
+        {
+          id: `mov-${Date.now()}`,
+          timestamp: nowIso,
+          stockItemId: 'stock-1',
+          stockItemName: 'Poulet entier frais',
+          type: 'in',
+          quantity: val,
+          balanceAfter: dailyChickenRemaining + val,
+          authorRole: userRole,
+          reason: `Arrivage complémentaire en cours de service (+${val} poulets)`,
+          unitCostDA: 520,
+        },
+        ...prev,
+      ]);
+    }
+  };
+
+  const resetTodayChickenBatch = (newTotal?: number) => {
+    const today = new Date().toISOString().split('T')[0];
+    const target = newTotal !== undefined ? Math.max(0, Math.round(newTotal)) : settings.dailyChickenQuota || 100;
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenDate: today,
+      dailyChickenInitial: target,
+    }));
+  };
 
   // Sync to localStorage
   useEffect(() => {
@@ -503,15 +681,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem(STORAGE_KEYS.ROLE, userRole);
   }, [userRole]);
 
-  // Dynamic product availability based on stock
+  // Dynamic product availability based on stock & daily chicken count
   useEffect(() => {
     if (!settings.autoStockAvailability) return;
 
     setProducts(prevProducts => {
       let changed = false;
       const updated = prevProducts.map(prod => {
-        const availablePortions = getAvailablePortions(prod.id, stockItems, compositions);
-        const shouldBeAvailable = availablePortions > 0;
+        const isChickenDish = prod.category === 'poulets' || prod.id === 'prod-1' || prod.id === 'prod-2';
+        let shouldBeAvailable = true;
+        if (isChickenDish) {
+          shouldBeAvailable = dailyChickenRemaining > 0;
+        } else {
+          const availablePortions = getAvailablePortions(prod.id, stockItems, compositions);
+          shouldBeAvailable = availablePortions > 0;
+        }
+
         if (prod.isAvailable !== shouldBeAvailable) {
           changed = true;
           return { ...prod, isAvailable: shouldBeAvailable };
@@ -520,7 +705,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       return changed ? updated : prevProducts;
     });
-  }, [stockItems, compositions, settings.autoStockAvailability]);
+  }, [stockItems, compositions, settings.autoStockAvailability, dailyChickenRemaining]);
 
   // Language & RTL sync
   const setLanguage = (lang: Language) => {
@@ -569,6 +754,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const addToCart = (product: Product, quantity: number, notes?: string) => {
     if (quantity <= 0 || !product.isAvailable) return;
+    const isChickenDish = product.category === 'poulets' || product.id === 'prod-1' || product.id === 'prod-2';
+    if (isChickenDish && dailyChickenRemaining <= 0) {
+      return;
+    }
+
     setCart(prev => {
       const idx = prev.findIndex(item => item.productId === product.id);
       if (idx >= 0) {
@@ -639,6 +829,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
@@ -668,6 +861,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       wilaya: 'Alger',
       commune: 'Birkhadem',
       address: deliveryAddress?.address || 'Birkhadem',
+      landmark: deliveryAddress?.landmark,
+      mapUrl: deliveryAddress?.mapUrl,
+      latitude: deliveryAddress?.latitude,
+      longitude: deliveryAddress?.longitude,
       orderCount: 1,
       totalSpent: total,
       createdAt: nowIso,
@@ -746,6 +943,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
@@ -767,6 +967,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         commune: deliveryAddress?.commune || 'Birkhadem',
         address: deliveryAddress?.address || 'Au comptoir',
         landmark: deliveryAddress?.landmark,
+        mapUrl: deliveryAddress?.mapUrl,
+        latitude: deliveryAddress?.latitude,
+        longitude: deliveryAddress?.longitude,
         orderCount: 1,
         totalSpent: total,
         createdAt: nowIso,
@@ -776,7 +979,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCustomers(prev =>
         prev.map(c =>
           c.id === matchedCustomer!.id
-            ? { ...c, orderCount: c.orderCount + 1, totalSpent: c.totalSpent + total }
+            ? {
+                ...c,
+                orderCount: c.orderCount + 1,
+                totalSpent: c.totalSpent + total,
+                mapUrl: deliveryAddress?.mapUrl || c.mapUrl,
+                latitude: deliveryAddress?.latitude || c.latitude,
+                longitude: deliveryAddress?.longitude || c.longitude,
+              }
             : c
         )
       );
@@ -1325,6 +1535,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     commune: string;
     address: string;
     landmark?: string;
+    mapUrl?: string;
+    latitude?: number;
+    longitude?: number;
   }) => {
     const existing = customers.find(c => c.phone === data.phone);
     if (existing) {
@@ -1334,6 +1547,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         commune: data.commune || existing.commune,
         address: data.address || existing.address,
         landmark: data.landmark || existing.landmark,
+        mapUrl: data.mapUrl !== undefined ? data.mapUrl : existing.mapUrl,
+        latitude: data.latitude !== undefined ? data.latitude : existing.latitude,
+        longitude: data.longitude !== undefined ? data.longitude : existing.longitude,
       };
       setCustomers(prev => prev.map(c => (c.id === existing.id ? updated : c)));
       setCurrentCustomer(updated);
@@ -1348,6 +1564,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       commune: data.commune,
       address: data.address,
       landmark: data.landmark,
+      mapUrl: data.mapUrl,
+      latitude: data.latitude,
+      longitude: data.longitude,
       orderCount: 0,
       totalSpent: 0,
       createdAt: new Date().toISOString(),
@@ -1410,14 +1629,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setClientTab,
         clientActiveOrder,
         setClientActiveOrder,
+        clientSimulatorMode,
+        setClientSimulatorMode,
         backOfficeTab,
         setBackOfficeTab,
         backOfficeOrdersView,
         setBackOfficeOrdersView,
         unreadAlertCount,
         clearNewOrderAlert,
+        isMobileSidebarOpen,
+        setIsMobileSidebarOpen,
+        toggleMobileSidebar,
         cancelModalOrder,
         setCancelModalOrder,
+        dailyChickenQuota,
+        dailyChickenInitial,
+        dailyChickenRemaining,
+        dailyChickenSold,
+        setDailyChickenQuota,
+        setTodayChickenCount,
+        resetTodayChickenBatch,
         placeOrder,
         addManualOrder,
         advanceOrderStatus,

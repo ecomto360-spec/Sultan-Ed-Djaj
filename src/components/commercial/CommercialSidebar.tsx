@@ -14,6 +14,7 @@ import {
   VolumeX,
   Lock,
   LockOpen,
+  X,
 } from 'lucide-react';
 
 interface CommercialSidebarProps {
@@ -31,6 +32,8 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
     language,
     settings,
     updateSettings,
+    isMobileSidebarOpen,
+    setIsMobileSidebarOpen,
   } = useApp();
 
   const t = TRANSLATIONS[language];
@@ -39,20 +42,37 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
   const isCashier = userRole === 'caissier';
   const isManager = userRole === 'gerant';
 
-  return (
-    <aside
-      className={`w-64 bg-[#111114] ${
-        isArabic ? 'border-l' : 'border-r'
-      } border-zinc-800 flex flex-col justify-between shrink-0 select-none`}
-    >
+  const handleTabClick = (tab: any) => {
+    setBackOfficeTab(tab);
+    setIsMobileSidebarOpen(false);
+  };
+
+  const handleManualOrderClick = () => {
+    setIsMobileSidebarOpen(false);
+    onOpenManualOrder();
+  };
+
+  const renderContent = (isMobileDrawer: boolean) => (
+    <div className="flex flex-col justify-between h-full">
       <div className="p-4 space-y-5">
-        {/* Brand */}
-        <BrandLogo size="md" isArabic={isArabic} />
+        {/* Brand Header */}
+        <div className="flex items-center justify-between">
+          <BrandLogo size="md" isArabic={isArabic} />
+          {isMobileDrawer && (
+            <button
+              onClick={() => setIsMobileSidebarOpen(false)}
+              className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white transition"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
 
         {/* Quick action button: Nouvelle commande manuelle */}
         {!isCook && (
           <button
-            onClick={onOpenManualOrder}
+            onClick={handleManualOrderClick}
             className="w-full h-10 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-xl font-bold text-xs shadow-md shadow-orange-950/40 flex items-center justify-center gap-2 transition active:scale-95"
           >
             <PlusCircle className="w-4 h-4" />
@@ -64,7 +84,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
         <nav className="space-y-1">
           {/* Commandes (All roles) */}
           <button
-            onClick={() => setBackOfficeTab('orders')}
+            onClick={() => handleTabClick('orders')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition ${
               backOfficeTab === 'orders'
                 ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -85,7 +105,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           {/* Catalogue (Hidden for cook) */}
           {!isCook && (
             <button
-              onClick={() => setBackOfficeTab('catalog')}
+              onClick={() => handleTabClick('catalog')}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
                 backOfficeTab === 'catalog'
                   ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -100,7 +120,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           {/* Clients (Hidden for cook) */}
           {!isCook && (
             <button
-              onClick={() => setBackOfficeTab('clients')}
+              onClick={() => handleTabClick('clients')}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
                 backOfficeTab === 'clients'
                   ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -115,7 +135,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           {/* STOCK (Gérant & Cuisinier, Hidden for Caissier) */}
           {!isCashier && (
             <button
-              onClick={() => setBackOfficeTab('stock')}
+              onClick={() => handleTabClick('stock')}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition ${
                 backOfficeTab === 'stock'
                   ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -137,7 +157,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           {/* RECETTES (Gérant ONLY, Lock icon) */}
           {isManager && (
             <button
-              onClick={() => setBackOfficeTab('revenue')}
+              onClick={() => handleTabClick('revenue')}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition ${
                 backOfficeTab === 'revenue'
                   ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -159,7 +179,7 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           {/* Paramètres (Gérant only) */}
           {isManager && (
             <button
-              onClick={() => setBackOfficeTab('settings')}
+              onClick={() => handleTabClick('settings')}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
                 backOfficeTab === 'settings'
                   ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
@@ -201,6 +221,39 @@ export const CommercialSidebar: React.FC<CommercialSidebarProps> = ({ onOpenManu
           <p>{isArabic ? 'بئر خادم، الجزائر العاصمة' : 'Birkhadem, Alger'}</p>
         </div>
       </div>
-    </aside>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Desktop Sidebar (lg screens and up) */}
+      <aside
+        className={`hidden lg:flex w-64 bg-[#111114] ${
+          isArabic ? 'border-l' : 'border-r'
+        } border-zinc-800 flex-col justify-between shrink-0 select-none`}
+      >
+        {renderContent(false)}
+      </aside>
+
+      {/* Mobile & Tablet Slide-over Drawer */}
+      {isMobileSidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex animate-in fade-in duration-200">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+            onClick={() => setIsMobileSidebarOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div
+            className={`relative w-72 max-w-[85vw] bg-[#111114] ${
+              isArabic ? 'border-l mr-auto' : 'border-r ml-0'
+            } border-zinc-800 flex flex-col justify-between z-10 shadow-2xl h-full overflow-y-auto select-none`}
+          >
+            {renderContent(true)}
+          </div>
+        </div>
+      )}
+    </>
   );
 };

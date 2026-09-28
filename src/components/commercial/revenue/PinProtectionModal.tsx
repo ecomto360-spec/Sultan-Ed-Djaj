@@ -8,7 +8,7 @@ interface PinProtectionModalProps {
 }
 
 export const PinProtectionModal: React.FC<PinProtectionModalProps> = ({ onSuccess }) => {
-  const { unlockRevenue, setBackOfficeTab, language, settings } = useApp();
+  const { unlockRevenue, setBackOfficeTab, language } = useApp();
   const t = TRANSLATIONS[language];
   const isArabic = language === 'ar';
 
@@ -47,17 +47,17 @@ export const PinProtectionModal: React.FC<PinProtectionModalProps> = ({ onSucces
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center p-6 bg-[#0c0c0e]">
-      <div className="bg-[#141418] border border-zinc-800 rounded-3xl p-8 max-w-sm w-full text-center space-y-6 shadow-2xl animate-fadeIn">
+    <div className="flex-1 flex items-center justify-center p-3 sm:p-6 bg-[#0c0c0e] overflow-y-auto min-h-0">
+      <div className="bg-[#141418] border border-zinc-800 rounded-3xl p-5 sm:p-7 max-w-sm w-full text-center space-y-4 sm:space-y-6 shadow-2xl animate-fadeIn my-auto">
         {/* Lock Icon */}
-        <div className="w-16 h-16 rounded-2xl bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center mx-auto shadow-inner">
-          <Lock className="w-8 h-8" />
+        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center mx-auto shadow-inner">
+          <Lock className="w-7 h-7 sm:w-8 sm:h-8" />
         </div>
 
         {/* Text */}
         <div className="space-y-1">
-          <h3 className="text-lg font-black text-white">{t.pinPromptTitle}</h3>
-          <p className="text-xs text-zinc-400">{t.pinPromptSubtitle}</p>
+          <h3 className="text-lg font-black text-white">{t.pinModalTitle}</h3>
+          <p className="text-xs text-zinc-400">{t.pinModalSubtitle}</p>
         </div>
 
         {/* PIN Circles Display */}
@@ -82,7 +82,7 @@ export const PinProtectionModal: React.FC<PinProtectionModalProps> = ({ onSucces
         {hasError && (
           <div className="text-xs font-bold text-red-400 flex items-center justify-center gap-1.5 animate-pulse">
             <ShieldAlert className="w-4 h-4" />
-            <span>{t.pinInvalid}</span>
+            <span>{t.pinErrorMsg}</span>
           </div>
         )}
 

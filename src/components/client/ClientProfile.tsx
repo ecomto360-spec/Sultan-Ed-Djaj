@@ -2,7 +2,22 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
-import { User, Phone, MapPin, Globe, Download, LogOut, RotateCcw, Check, Sparkles, Clock } from 'lucide-react';
+import {
+  User,
+  Phone,
+  MapPin,
+  Globe,
+  Download,
+  LogOut,
+  RotateCcw,
+  Check,
+  Sparkles,
+  Clock,
+  Navigation,
+  ExternalLink,
+  Loader2,
+  CheckCircle2,
+} from 'lucide-react';
 
 export const ClientProfile: React.FC = () => {
   const {
@@ -31,9 +46,33 @@ export const ClientProfile: React.FC = () => {
   const [commune, setCommune] = useState(currentCustomer?.commune || 'Birkhadem');
   const [address, setAddress] = useState(currentCustomer?.address || '');
   const [landmark, setLandmark] = useState(currentCustomer?.landmark || '');
+  const [mapUrl, setMapUrl] = useState(currentCustomer?.mapUrl || '');
+  const [latitude, setLatitude] = useState<number | undefined>(currentCustomer?.latitude);
+  const [longitude, setLongitude] = useState<number | undefined>(currentCustomer?.longitude);
+  const [isLocating, setIsLocating] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   const customerOrders = orders.filter(o => o.customerId === currentCustomer?.id || o.customerPhone === currentCustomer?.phone);
+
+  const handleGetGeolocation = () => {
+    if (!navigator.geolocation) return;
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const url = `https://maps.google.com/?q=${lat},${lng}`;
+        setLatitude(lat);
+        setLongitude(lng);
+        setMapUrl(url);
+        setIsLocating(false);
+      },
+      () => {
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,6 +82,9 @@ export const ClientProfile: React.FC = () => {
       commune,
       address,
       landmark,
+      mapUrl: mapUrl.trim() || undefined,
+      latitude,
+      longitude,
     });
     setIsEditing(false);
     setSavedSuccess(true);
@@ -90,13 +132,27 @@ export const ClientProfile: React.FC = () => {
                 {currentCustomer?.landmark ? ` (${currentCustomer.landmark})` : ''}
               </span>
             </div>
+            {currentCustomer?.mapUrl && (
+              <div className="flex items-center gap-2 pt-0.5">
+                <Navigation className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <a
+                  href={currentCustomer.mapUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:underline flex items-center gap-1 text-[11px]"
+                >
+                  <span>{isArabic ? 'موقع GPS مسجل (Google Maps)' : 'Position GPS enregistrée (Google Maps)'}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            )}
             <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
               <span>{t.ordersCount}: <strong className="text-zinc-200">{currentCustomer?.orderCount || 0}</strong></span>
               <span>{t.totalSpent}: <strong className="text-amber-400">{currentCustomer?.totalSpent?.toLocaleString() || 0} {t.currency}</strong></span>
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-800 space-y-2 text-xs">
+          <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-800 space-y-2.5 text-xs">
             <div>
               <label className="text-[10px] text-zinc-400">{t.fullName}</label>
               <input
@@ -144,9 +200,42 @@ export const ClientProfile: React.FC = () => {
                 className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700"
               />
             </div>
+            <div className="space-y-1 pt-1 border-t border-zinc-800/80">
+              <label className="text-[10px] text-zinc-400 flex items-center gap-1">
+                <Navigation className="w-3 h-3 text-orange-400" />
+                <span>{t.gpsLocationLabel}</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleGetGeolocation}
+                  disabled={isLocating}
+                  className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-orange-400 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-zinc-700 shrink-0"
+                >
+                  {isLocating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>{t.gettingLocation}</span>
+                    </>
+                  ) : (
+                    <>
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>{isArabic ? 'تحديد GPS' : 'Localiser GPS'}</span>
+                    </>
+                  )}
+                </button>
+                <input
+                  type="url"
+                  value={mapUrl}
+                  onChange={e => setMapUrl(e.target.value)}
+                  placeholder="Lien Google Maps..."
+                  className="w-full bg-zinc-800 rounded-lg p-1.5 text-xs text-white border border-zinc-700 font-mono"
+                />
+              </div>
+            </div>
             <button
               type="submit"
-              className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-bold"
+              className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-bold shadow-md transition"
             >
               {language === 'ar' ? 'حفظ التعديلات' : 'Enregistrer'}
             </button>
