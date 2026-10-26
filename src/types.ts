@@ -57,6 +57,7 @@ export interface Order {
   customerName: string;
   customerPhone: string;
   type: OrderType;
+  source?: OrderSource;
   status: OrderStatus;
   items: OrderItem[];
   subtotal: number;
@@ -79,6 +80,58 @@ export interface Order {
   cancellationReason?: string;
   isNewAlert?: boolean;
   stockDeducted?: boolean; // indicates if ingredients were deducted on preparing
+  dayId?: string;
+  paymentMethod?: PaymentMethod; // 'cash' | 'card' | 'other' (default 'cash')
+  driverName?: string;
+  driverFee?: number;
+  sentToWhatsApp?: boolean; // Indique si la commande a été envoyée au groupe WhatsApp de dispatch
+  sentAt?: string; // Heure / date d'envoi au groupe WhatsApp
+}
+
+export type PaymentMethod = 'cash' | 'card' | 'other';
+export type OrderSource = 'app' | 'phone' | 'counter' | 'whatsapp';
+
+export type DayStatus = 'open' | 'closed';
+
+export interface QuotaAdjustment {
+  id: string;
+  timestamp: string;
+  previousQuota: number;
+  newQuota: number;
+  delta: number;
+  mode: 'set_initial' | 'set_remaining' | 'add' | 'reset';
+  authorRole: UserRole;
+  reason?: string;
+}
+
+export interface Day {
+  id: string;
+  date: string; // YYYY-MM-DD (Africa/Algiers) ou 'initial'
+  label?: string; // e.g., "Données initiales"
+  status: DayStatus;
+  openedAt: string;
+  closedAt?: string;
+  quotaInitial: number;
+  quotaCurrent: number;
+  quotaAdjustments: QuotaAdjustment[];
+  pouletsVendus: number;
+  pouletsRestants: number;
+  nbCommandes: number; // Commandes delivered
+  nbAnnulees: number;
+  ca: number; // CA produits (hors frais de livraison)
+  deliveryFees?: number; // Frais de livraison encaissés
+  caTotal?: number; // CA total (produits + livraison)
+  caInProgress?: number; // CA des commandes en cours
+  panierMoyen: number; // CA produits / nbCommandes
+  nbLivraison: number;
+  nbComptoir: number;
+  annulationsPerte?: number; // Valeur perdue par annulations
+  // Clôture de caisse intégrée
+  theoreticalCash?: number;
+  countedCash?: number;
+  cashDifference?: number;
+  cashClosingNote?: string;
+  cashClosedAt?: string;
 }
 
 export interface StoreSettings {
@@ -94,11 +147,16 @@ export interface StoreSettings {
   city: string; // "Alger"
   soundEnabled: boolean;
   managerPin: string; // e.g. "0000"
+  cookPin?: string; // e.g. "1111"
+  cashierPin?: string; // e.g. "2222"
+  requireAdminPin?: boolean; // Optional PIN gate for /admin (activable plus tard)
   dailyRevenueTarget: number; // e.g. 25000 DA
   autoStockAvailability: boolean; // dynamic out-of-stock when portions = 0
   dailyChickenQuota: number; // Nombre de poulets prévus chaque jour (ex: 100)
   dailyChickenDate: string; // Date du quota actif (YYYY-MM-DD)
   dailyChickenInitial: number; // Quantité totale mise en cuisson/broche aujourd'hui (ex: 100)
+  autoSendWhatsAppOnAccept?: boolean; // Envoi automatique au groupe dès l'acceptation de la commande
+  whatsAppGroupInviteUrl?: string; // Lien d'invitation du groupe WhatsApp (https://chat.whatsapp.com/...)
 }
 
 // ══════════════════════════════════════════════════
@@ -242,4 +300,5 @@ export type BackOfficeTab =
   | 'clients'
   | 'stock'
   | 'revenue'
+  | 'history'
   | 'settings';

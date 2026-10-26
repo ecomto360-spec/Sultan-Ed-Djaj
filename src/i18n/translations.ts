@@ -18,6 +18,13 @@ export const TRANSLATIONS = {
     roleGerant: 'Gérant',
     roleCuisinier: 'Cuisinier',
     roleCaissier: 'Caissier',
+
+    // Theme (Mode Jour / Nuit)
+    themeLabel: 'Thème',
+    themeLight: 'Clair',
+    themeDark: 'Sombre',
+    themeAuto: 'Automatique',
+    themeToggleAria: 'Changer le thème d\'affichage (Clair, Sombre, Automatique)',
     
     // Nav
     navMenu: 'Menu',
@@ -171,6 +178,7 @@ export const TRANSLATIONS = {
     tabClients: 'Clients',
     tabStock: 'Stock',
     tabRevenue: 'Recettes',
+    tabHistory: 'Historique',
     tabSettings: 'Paramètres',
 
     // Module Stock
@@ -466,6 +474,13 @@ export const TRANSLATIONS = {
     roleCuisinier: 'الطباخ (المطبخ)',
     roleCaissier: 'أمين الصندوق (الكاشير)',
 
+    // Theme (Mode Jour / Nuit)
+    themeLabel: 'المظهر',
+    themeLight: 'نهاري (فاتح)',
+    themeDark: 'ليلي (داكن)',
+    themeAuto: 'تلقائي',
+    themeToggleAria: 'تغيير المظهر (نهاري، ليلي، تلقائي)',
+
     // Nav
     navMenu: 'القائمة',
     navCart: 'السلة',
@@ -618,6 +633,7 @@ export const TRANSLATIONS = {
     tabClients: 'الزبائن',
     tabStock: 'المخزون',
     tabRevenue: 'المالية والمداخيل',
+    tabHistory: 'سجل الأيام',
     tabSettings: 'الإعدادات',
 
     // Module Stock (AR)

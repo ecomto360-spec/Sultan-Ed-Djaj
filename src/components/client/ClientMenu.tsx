@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { ProductCategory, Product } from '../../types';
 import { ProductSvgThumb } from '../common/ProductSvgThumb';
-import { Search, Plus, Minus, ShoppingBag, CheckCircle2, XCircle, Flame } from 'lucide-react';
+import { Search, Plus, Minus, ShoppingBag, CheckCircle2, XCircle } from 'lucide-react';
 
 export const ClientMenu: React.FC = () => {
   const {
@@ -69,34 +69,23 @@ export const ClientMenu: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-3.5 pb-24 space-y-4">
         {/* Closed warning if store closed */}
         {!isStoreActuallyOpen && (
-          <div className="p-3 rounded-xl bg-red-950/50 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
-            <XCircle className="w-4 h-4 shrink-0 text-red-400" />
+          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-300 dark:border-red-500/30 text-red-800 dark:text-red-300 text-xs flex items-center gap-2">
+            <XCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
             <span>{t.storeClosedCannotOrder}</span>
           </div>
         )}
 
-      {/* Hero Welcome banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-orange-950/70 via-zinc-900 to-amber-950/60 p-3.5 border border-orange-500/30 shadow-md">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 text-[11px] font-bold border border-orange-500/30">
-              <Flame className="w-3 h-3 text-orange-400 fill-orange-400" />
-              <span>{isArabic ? 'مشوي على الجمر الأصيل' : 'Braisé au charbon de bois'}</span>
+        {/* Daily chicken stock exhausted banner */}
+        {isStoreActuallyOpen && dailyChickenRemaining <= 0 && (
+          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-500/40 text-red-900 dark:text-red-200 text-xs flex items-center justify-between gap-2 shadow-sm">
+            <div className="flex items-center gap-2">
+              <XCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
+              <span className="font-bold">
+                {isArabic ? 'نفدت الكمية لليوم — الدجاج غير متوفر حالياً' : "Épuisé pour aujourd'hui — Stock de poulet du jour terminé"}
+              </span>
             </div>
-            <h2 className="text-base font-bold text-white font-serif">
-              {isArabic ? 'سلطان الدجاج – بئر خادم' : 'Sultan Ed-Djaj • Birkhadem'}
-            </h2>
-            <p className="text-xs text-zinc-300">
-              {isArabic
-                ? 'دجاج محمر على السيخ ومشوي على الجمر، مقرمش، طازج ومتبل بعناية'
-                : 'Poulet rôti à la broche & braisé au charbon naturel'}
-            </p>
           </div>
-          <div className="w-12 h-12 shrink-0">
-            <ProductSvgThumb type="poulet-roti" className="w-full h-full drop-shadow-md" />
-          </div>
-        </div>
-      </div>
+        )}
 
       {/* Search Input */}
       <div className="relative">
@@ -106,14 +95,14 @@ export const ClientMenu: React.FC = () => {
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           placeholder={t.searchPlaceholder}
-          className={`w-full h-11 bg-zinc-900/90 rounded-xl border border-zinc-700/80 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-orange-500 transition shadow-inner ${
+          className={`w-full h-11 bg-white dark:bg-zinc-900/90 rounded-xl border border-zinc-300 dark:border-zinc-700/80 text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-amber-500 transition shadow-inner ${
             isArabic ? 'pr-9 pl-3 text-right' : 'pl-9 pr-3 text-left'
           }`}
         />
         {searchQuery && (
           <button
             onClick={() => setSearchQuery('')}
-            className={`absolute top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white ${isArabic ? 'left-3' : 'right-3'}`}
+            className={`absolute top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-zinc-900 dark:hover:text-white ${isArabic ? 'left-3' : 'right-3'}`}
           >
             ✕
           </button>
@@ -131,7 +120,7 @@ export const ClientMenu: React.FC = () => {
               className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                 isSelected
                   ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm ring-1 ring-orange-400/40'
-                  : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-700/50'
+                  : 'bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-800 border border-zinc-250 dark:border-zinc-700/50'
               }`}
             >
               {cat.label}
@@ -151,22 +140,22 @@ export const ClientMenu: React.FC = () => {
           return (
             <div
               key={product.id}
-              className={`flex flex-col justify-between bg-zinc-900/90 rounded-2xl border transition-all p-2.5 relative group ${
+              className={`flex flex-col justify-between bg-white dark:bg-zinc-900/90 rounded-2xl border transition-all p-2.5 relative group ${
                 isAvailable
-                  ? 'border-zinc-800 hover:border-orange-500/40 shadow-sm'
-                  : 'border-zinc-800/50 opacity-60'
+                  ? 'border-zinc-250 dark:border-zinc-800 hover:border-amber-500/50 dark:hover:border-orange-500/40 shadow-sm'
+                  : 'border-zinc-200 dark:border-zinc-800/50 opacity-60'
               }`}
             >
               {/* Product Thumbnail */}
-              <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-zinc-950/80 mb-2 border border-zinc-800/60 flex items-center justify-center">
+              <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-950/80 mb-2 border border-zinc-200 dark:border-zinc-800/60 flex items-center justify-center">
                 <ProductSvgThumb type={product.imageType} className="w-full h-full object-contain" />
                 
                 {/* Availability Badge */}
                 <div
                   className={`absolute top-1.5 ${isArabic ? 'left-1.5' : 'right-1.5'} text-[9px] font-bold px-1.5 py-0.5 rounded-md backdrop-blur-md border ${
                     isAvailable
-                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/30'
-                      : 'bg-red-950/80 text-red-300 border-red-500/30'
+                      ? 'bg-emerald-50/90 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/30'
+                      : 'bg-red-50/90 dark:bg-red-950/80 text-red-800 dark:text-red-300 border-red-300 dark:border-red-500/30'
                   }`}
                 >
                   {isAvailable
@@ -179,39 +168,39 @@ export const ClientMenu: React.FC = () => {
 
               {/* Title & Description */}
               <div className="space-y-1 mb-2">
-                <h3 className="text-xs font-bold text-zinc-100 line-clamp-1 leading-snug">
+                <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 line-clamp-1 leading-snug">
                   {isArabic ? product.nameAr : product.nameFr}
                 </h3>
-                <p className="text-[10px] text-zinc-400 line-clamp-2 leading-relaxed">
+                <p className="text-[10px] text-zinc-600 dark:text-zinc-400 line-clamp-2 leading-relaxed">
                   {isArabic ? product.descriptionAr : product.descriptionFr}
                 </p>
               </div>
 
               {/* Price & Action */}
-              <div className="pt-2 border-t border-zinc-800/80 space-y-2 mt-auto">
+              <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800/80 space-y-2 mt-auto">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-sm font-extrabold text-amber-400">
+                  <span className="text-sm font-extrabold text-amber-700 dark:text-amber-400">
                     {product.price.toLocaleString()}
                   </span>
-                  <span className="text-[10px] text-zinc-400 font-semibold">{t.currency}</span>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold">{t.currency}</span>
                 </div>
 
                 {isAvailable && isStoreActuallyOpen ? (
                   <div className="flex items-center gap-1.5">
                     {/* Stepper */}
-                    <div className="flex items-center bg-zinc-800/80 rounded-lg border border-zinc-700 p-0.5 shrink-0">
+                    <div className="flex items-center bg-zinc-100 dark:bg-zinc-800/80 rounded-lg border border-zinc-300 dark:border-zinc-700 p-0.5 shrink-0">
                       <button
                         onClick={() => setQty(product.id, -1)}
-                        className="w-6 h-6 flex items-center justify-center text-zinc-300 hover:text-white rounded hover:bg-zinc-700/60 transition"
+                        className="w-6 h-6 flex items-center justify-center text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-700/60 transition"
                       >
                         <Minus className="w-3 h-3" />
                       </button>
-                      <span className="w-5 text-center text-xs font-bold text-zinc-100">
+                      <span className="w-5 text-center text-xs font-bold text-zinc-900 dark:text-zinc-100">
                         {qty}
                       </span>
                       <button
                         onClick={() => setQty(product.id, 1)}
-                        className="w-6 h-6 flex items-center justify-center text-zinc-300 hover:text-white rounded hover:bg-zinc-700/60 transition"
+                        className="w-6 h-6 flex items-center justify-center text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-700/60 transition"
                       >
                         <Plus className="w-3 h-3" />
                       </button>
@@ -228,7 +217,7 @@ export const ClientMenu: React.FC = () => {
                     >
                       {justAddedId === product.id ? (
                         <>
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-200" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-100" />
                           <span className="text-[10px]">{isArabic ? 'تمت الإضافة' : 'Ajouté !'}</span>
                         </>
                       ) : (
@@ -240,7 +229,7 @@ export const ClientMenu: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="w-full py-1 text-center text-[10px] font-semibold text-zinc-500 bg-zinc-800/40 rounded-lg">
+                  <div className="w-full py-1 text-center text-[10px] font-semibold text-zinc-500 bg-zinc-100 dark:bg-zinc-800/40 rounded-lg border border-zinc-200 dark:border-transparent">
                     {!isStoreActuallyOpen
                       ? t.storeClosed
                       : isChickenSoldOut
@@ -255,7 +244,7 @@ export const ClientMenu: React.FC = () => {
       </div>
 
       {filteredProducts.length === 0 && (
-        <div className="py-12 text-center text-zinc-400 space-y-2">
+        <div className="py-12 text-center text-zinc-500 space-y-2">
           <p className="text-xs">{isArabic ? 'لا توجد أطباق مطابقة لبحثك.' : 'Aucun plat ne correspond à votre recherche.'}</p>
         </div>
       )}
@@ -266,7 +255,7 @@ export const ClientMenu: React.FC = () => {
         <div className="absolute bottom-2 left-3 right-3 z-30 pointer-events-none">
           <button
             onClick={() => setClientTab('cart')}
-            className="pointer-events-auto w-full h-12 bg-orange-600 hover:bg-orange-500 text-white rounded-xl shadow-2xl shadow-black/80 flex items-center justify-between px-3.5 font-bold border border-orange-400/50 hover:brightness-105 active:scale-[0.98] transition ring-2 ring-orange-500/30"
+            className="pointer-events-auto w-full h-12 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-xl shadow-xl shadow-black/30 flex items-center justify-between px-3.5 font-bold border border-orange-400/50 hover:brightness-105 active:scale-[0.98] transition ring-2 ring-orange-500/30"
           >
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-lg bg-zinc-950 text-white flex items-center justify-center text-xs font-black ring-1 ring-white/30">

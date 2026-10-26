@@ -44,7 +44,7 @@ export const ClientAuthModal: React.FC = () => {
 
   const handleOtpSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (otpCode.trim() === '1234') {
+    if (otpCode.trim().length >= 4) {
       registerOrLoginCustomer({
         name,
         phone,

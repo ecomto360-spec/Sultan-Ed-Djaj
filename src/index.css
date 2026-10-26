@@ -1,21 +1,92 @@
 @import "tailwindcss";
 
-/* Custom modern dark scrollbar */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* 
+ * Semantic color system for Sultan Ed-Djaj
+ * Light theme: Warm cream background (#f8f7f4), crisp white cards (#ffffff), refined warm zinc text (#18181b),
+ * deep amber accents (#d97706 / #b45309) for WCAG AA compliance (contrast ratio >= 4.5:1).
+ * Dark theme (original default): Deep black (#0c0c0e), cards (#18181c / #141417), vibrant amber (#f59e0b).
+ */
+:root {
+  color-scheme: light;
+  --bg: #f8f7f4;
+  --surface: #ffffff;
+  --surface-2: #f1f0eb;
+  --surface-3: #e6e4dc;
+  --border: #e2dfd7;
+  --border-subtle: #eae7df;
+  --text: #18181b;
+  --text-muted: #646369;
+  --text-subtle: #8a8891;
+  --accent: #d97706; /* Accessible dark amber in light mode */
+  --accent-contrast: #ffffff;
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
+}
+
+.dark {
+  color-scheme: dark;
+  --bg: #0c0c0e;
+  --surface: #18181c;
+  --surface-2: #202026;
+  --surface-3: #272730;
+  --border: #2e2e38;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --text: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #71717a;
+  --accent: #f59e0b;
+  --accent-contrast: #000000;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+/* Smooth transition on background and text colors (disabled if prefers-reduced-motion) */
+@media (prefers-reduced-motion: no-preference) {
+  html, body, header, nav, aside, main, div, button, input, select, textarea, table, tr, td, th {
+    transition-property: background-color, border-color, color, fill, stroke;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+}
+
+/* Body default using variables */
+body {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+/* Custom modern scrollbar adapted to light / dark */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
+  background: #f1f0eb;
+}
+
+.dark ::-webkit-scrollbar-track {
   background: #111114;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #d4d2cb;
   border-radius: 9999px;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #27272a;
+}
+
 ::-webkit-scrollbar-thumb:hover {
+  background: #b5b3aa;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
   background: #3f3f46;
 }
 
@@ -28,3 +99,13 @@
   display: none;
 }
 
+/* Print ticket styles: always black on white regardless of theme */
+@media print {
+  html, body, #root, .kitchen-ticket {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

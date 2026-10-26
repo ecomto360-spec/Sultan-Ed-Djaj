@@ -16,14 +16,14 @@ export const ClientBottomNav: React.FC = () => {
   const hasActiveOrder = clientActiveOrder && clientActiveOrder.status !== 'delivered' && clientActiveOrder.status !== 'cancelled';
 
   return (
-    <nav className="h-16 bg-[#161619] border-t border-zinc-800 flex items-center justify-around px-2 shrink-0 z-40">
+    <nav className="h-16 bg-white dark:bg-[#161619] border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-around px-2 shrink-0 z-40 transition-colors shadow-sm">
       {/* Menu */}
       <button
         onClick={() => setClientTab('menu')}
         className={`flex-1 min-h-[44px] flex flex-col items-center justify-center gap-1 rounded-xl transition ${
           clientTab === 'menu'
-            ? 'text-orange-400 font-bold'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'text-amber-700 dark:text-orange-400 font-bold'
+            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
         }`}
       >
         <UtensilsCrossed className="w-5 h-5" />
@@ -35,8 +35,8 @@ export const ClientBottomNav: React.FC = () => {
         onClick={() => setClientTab('cart')}
         className={`relative flex-1 min-h-[44px] flex flex-col items-center justify-center gap-1 rounded-xl transition ${
           clientTab === 'cart'
-            ? 'text-orange-400 font-bold'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'text-amber-700 dark:text-orange-400 font-bold'
+            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
         }`}
       >
         <div className="relative">
@@ -55,14 +55,14 @@ export const ClientBottomNav: React.FC = () => {
         onClick={() => setClientTab('tracking')}
         className={`relative flex-1 min-h-[44px] flex flex-col items-center justify-center gap-1 rounded-xl transition ${
           clientTab === 'tracking'
-            ? 'text-orange-400 font-bold'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'text-amber-700 dark:text-orange-400 font-bold'
+            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
         }`}
       >
         <div className="relative">
           <Clock className="w-5 h-5" />
           {hasActiveOrder && (
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-zinc-900 animate-pulse" />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900 animate-pulse" />
           )}
         </div>
         <span className="text-[11px] leading-none">{t.navOrders}</span>
@@ -73,8 +73,8 @@ export const ClientBottomNav: React.FC = () => {
         onClick={() => setClientTab('profile')}
         className={`flex-1 min-h-[44px] flex flex-col items-center justify-center gap-1 rounded-xl transition ${
           clientTab === 'profile'
-            ? 'text-orange-400 font-bold'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'text-amber-700 dark:text-orange-400 font-bold'
+            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
         }`}
       >
         <User className="w-5 h-5" />

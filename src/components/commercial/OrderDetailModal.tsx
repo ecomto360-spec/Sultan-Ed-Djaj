@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Order } from '../../types';
 import { useApp } from '../../context/AppContext';
-import { X, Phone, MapPin, Printer, Clock, Motorbike, Store, CheckCircle2, Navigation, ExternalLink } from 'lucide-react';
+import { X, Phone, MapPin, Printer, Clock, Motorbike, Store, CheckCircle2, Navigation, ExternalLink, MessageCircle, Check } from 'lucide-react';
+import { WhatsAppPreviewModal } from './WhatsAppPreviewModal';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -10,17 +11,20 @@ interface OrderDetailModalProps {
 }
 
 export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onPrint }) => {
-  const { updateOrderStatus, language } = useApp();
+  const { orders, updateOrderStatus, language } = useApp();
   const isArabic = language === 'ar';
+  const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
   if (!order) return null;
 
+  const activeOrder = orders.find(o => o.id === order.id) || order;
+
   const mapsLink =
-    order.deliveryAddress?.mapUrl ||
-    (order.deliveryAddress?.latitude && order.deliveryAddress?.longitude
-      ? `https://maps.google.com/?q=${order.deliveryAddress.latitude},${order.deliveryAddress.longitude}`
-      : order.deliveryAddress?.address
+    activeOrder.deliveryAddress?.mapUrl ||
+    (activeOrder.deliveryAddress?.latitude && activeOrder.deliveryAddress?.longitude
+      ? `https://maps.google.com/?q=${activeOrder.deliveryAddress.latitude},${activeOrder.deliveryAddress.longitude}`
+      : activeOrder.deliveryAddress?.address
       ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-          `${order.deliveryAddress.address}, ${order.deliveryAddress.commune}, Alger`
+          `${activeOrder.deliveryAddress.address}, ${activeOrder.deliveryAddress.commune}, Alger`
         )}`
       : null);
 
@@ -136,22 +140,77 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClo
         </div>
 
         {/* Footer actions */}
-        <div className="p-4 border-t border-zinc-800 flex items-center justify-end gap-2">
-          <button
-            onClick={() => onPrint(order)}
-            className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl flex items-center gap-1.5"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>{isArabic ? 'طباعة' : 'Imprimer'}</span>
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold rounded-xl"
-          >
-            {isArabic ? 'إغلاق' : 'Fermer'}
-          </button>
+        <div className="p-4 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onPrint(activeOrder)}
+              className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition active:scale-95"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>{isArabic ? 'طباعة' : 'Imprimer'}</span>
+            </button>
+
+            <button
+              onClick={() => setIsWhatsAppOpen(true)}
+              className={`px-3 py-2 text-xs font-semibold rounded-xl flex items-center gap-1.5 border transition active:scale-95 ${
+                activeOrder.sentToWhatsApp
+                  ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-600/30'
+                  : 'bg-zinc-800 hover:bg-emerald-950/40 text-emerald-400 border-zinc-700 hover:border-emerald-500/40'
+              }`}
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>
+                {activeOrder.sentToWhatsApp
+                  ? (isArabic ? 'إعادة الإرسال لواتساب' : 'Renvoyer au groupe')
+                  : (isArabic ? 'إرسال لواتساب' : 'Envoyer au groupe')}
+              </span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-xl transition"
+            >
+              {isArabic ? 'إغلاق' : 'Fermer'}
+            </button>
+
+            {/* Accept Order Button for pending orders */}
+            {activeOrder.status === 'pending' && (
+              <button
+                onClick={() => {
+                  updateOrderStatus(activeOrder.id, 'preparing');
+                  setIsWhatsAppOpen(true);
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md shadow-orange-950/20 active:scale-95 transition"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{isArabic ? 'قبول وإرسال للواتساب' : 'Accepter & Dispatch WhatsApp'}</span>
+              </button>
+            )}
+
+            {/* Ready Button for preparing orders */}
+            {activeOrder.status === 'preparing' && (
+              <button
+                onClick={() => {
+                  updateOrderStatus(activeOrder.id, 'ready');
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md active:scale-95 transition"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{isArabic ? 'تحديد كجاهز' : 'Marquer Prête'}</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {isWhatsAppOpen && (
+        <WhatsAppPreviewModal
+          order={activeOrder}
+          onClose={() => setIsWhatsAppOpen(false)}
+        />
+      )}
     </div>
   );
 };

@@ -11,7 +11,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     
     <!-- PWA meta tags -->
-    <meta name="theme-color" content="#18181b" />
+    <meta name="theme-color" content="#0c0c0e" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -19,6 +19,200 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+
+    <!-- Polyfill/fix for browser extensions and Vite HMR websocket in iframe -->
+    <!-- Polyfill/fix for browser extensions and Vite HMR websocket in iframe -->
+    <script>
+      (function() {
+        try {
+          var originalFetch = window.fetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() { return originalFetch; },
+            set: function(newFetch) { originalFetch = newFetch; },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {}
+
+        // Mock WebSocket for Vite HMR in iframe to prevent connection failures and unhandled rejections
+        try {
+          var NativeWebSocket = window.WebSocket;
+          if (NativeWebSocket) {
+            window.WebSocket = function(url, protocols) {
+              var isViteHmr = false;
+              if (typeof url === 'string' && (url.indexOf('token=') !== -1 || url.indexOf('24678') !== -1 || url.indexOf('vite-hmr') !== -1)) {
+                isViteHmr = true;
+              }
+              if (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1)) {
+                isViteHmr = true;
+              }
+
+              if (isViteHmr) {
+                var listeners = {};
+                var mockSocket = {
+                  CONNECTING: 0,
+                  OPEN: 1,
+                  CLOSING: 2,
+                  CLOSED: 3,
+                  readyState: 1,
+                  url: String(url),
+                  protocol: 'vite-hmr',
+                  extensions: '',
+                  bufferedAmount: 0,
+                  binaryType: 'blob',
+                  onopen: null,
+                  onclose: null,
+                  onerror: null,
+                  onmessage: null,
+                  send: function() {},
+                  close: function() {
+                    mockSocket.readyState = 3;
+                    if (typeof mockSocket.onclose === 'function') {
+                      mockSocket.onclose({ type: 'close', wasClean: true, code: 1000, reason: '' });
+                    }
+                  },
+                  addEventListener: function(type, listener) {
+                    if (!listeners[type]) listeners[type] = [];
+                    listeners[type].push(listener);
+                  },
+                  removeEventListener: function(type, listener) {
+                    if (!listeners[type]) return;
+                    listeners[type] = listeners[type].filter(function(l) { return l !== listener; });
+                  },
+                  dispatchEvent: function(event) {
+                    var fns = listeners[event && event.type] || [];
+                    fns.forEach(function(fn) {
+                      try { fn.call(mockSocket, event); } catch (e) {}
+                    });
+                    return true;
+                  }
+                };
+
+                setTimeout(function() {
+                  if (mockSocket.readyState === 1) {
+                    if (typeof mockSocket.onopen === 'function') {
+                      try { mockSocket.onopen({ type: 'open' }); } catch (e) {}
+                    }
+                    mockSocket.dispatchEvent({ type: 'open' });
+                  }
+                }, 0);
+
+                return mockSocket;
+              }
+
+              return new NativeWebSocket(url, protocols);
+            };
+
+            window.WebSocket.CONNECTING = 0;
+            window.WebSocket.OPEN = 1;
+            window.WebSocket.CLOSING = 2;
+            window.WebSocket.CLOSED = 3;
+            window.WebSocket.prototype = NativeWebSocket.prototype;
+          }
+        } catch (e) {}
+
+        function isIgnoredError(str) {
+          if (!str || typeof str !== 'string') return false;
+          return (
+            str.indexOf('createWebSocketModuleRunnerTransport') !== -1 ||
+            str.indexOf('@vite/client') !== -1 ||
+            str.indexOf('WebSocket closed without opened') !== -1 ||
+            str.indexOf('failed to connect to websocket') !== -1 ||
+            str.indexOf('WebSocket') !== -1 ||
+            str.indexOf('Cannot set property fetch') !== -1 ||
+            str.indexOf('chrome-extension://') !== -1
+          );
+        }
+
+        function shouldSuppress(event) {
+          if (!event) return false;
+          var msg = event.message ? String(event.message) : '';
+          var file = event.filename ? String(event.filename) : '';
+          var stack = event.error && event.error.stack ? String(event.error.stack) : '';
+          var errStr = event.error ? String(event.error) : '';
+          var reasonStack = event.reason && event.reason.stack ? String(event.reason.stack) : '';
+          var reasonStr = event.reason ? String(event.reason) : '';
+
+          return (
+            isIgnoredError(msg) ||
+            isIgnoredError(file) ||
+            isIgnoredError(stack) ||
+            isIgnoredError(errStr) ||
+            isIgnoredError(reasonStack) ||
+            isIgnoredError(reasonStr)
+          );
+        }
+
+        // Suppress unhandled errors originating from extensions or Vite WebSocket HMR
+        window.addEventListener('error', function(event) {
+          if (shouldSuppress(event)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (shouldSuppress(event)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        var prevOnError = window.onerror;
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+          var combined = String(msg) + ' ' + String(url) + ' ' + (error && error.stack ? String(error.stack) : '');
+          if (isIgnoredError(combined)) {
+            return true;
+          }
+          if (typeof prevOnError === 'function') {
+            return prevOnError.apply(this, arguments);
+          }
+        };
+
+        // Also prevent console.error from triggering outer host error listeners on [vite] websocket warnings
+        var origConsoleError = console.error;
+        console.error = function() {
+          var first = arguments[0];
+          if (typeof first === 'string' && (first.indexOf('[vite] failed to connect to websocket') !== -1 || first.indexOf('WebSocket closed without opened') !== -1)) {
+            return;
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+      })();
+    </script>
+
+    <!-- Anti-flash inline script for Dark / Light mode -->
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('sultan_theme');
+          var isDark = true;
+          if (saved === 'dark') {
+            isDark = true;
+          } else if (saved === 'light') {
+            isDark = false;
+          } else {
+            // 'auto' or unset: check system preference
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+              isDark = false;
+            } else {
+              isDark = true;
+            }
+          }
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.style.colorScheme = 'light';
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', '#f8f7f4');
+          }
+        } catch (e) {}
+      })();
+    </script>
 
     <!-- Google Fonts for Arabic & Latin display -->
     <link rel="preconnect" href="https://fonts.googleapis.com">

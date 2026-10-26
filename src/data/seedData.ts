@@ -989,11 +989,16 @@ export const INITIAL_SETTINGS: StoreSettings = {
   city: 'Alger',
   soundEnabled: true,
   managerPin: '0000',
+  cookPin: '1111',
+  cashierPin: '2222',
+  requireAdminPin: false,
   dailyRevenueTarget: 25000,
   autoStockAvailability: true,
   dailyChickenQuota: 100,
   dailyChickenDate: new Date().toISOString().split('T')[0],
   dailyChickenInitial: 100,
+  autoSendWhatsAppOnAccept: true,
+  whatsAppGroupInviteUrl: '',
 };
 
 export const INITIAL_ORDERS: Order[] = TODAY_ORDERS;

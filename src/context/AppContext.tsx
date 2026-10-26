@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback, ReactNode } from 'react';
 import {
   Product,
   Customer,
@@ -18,6 +18,10 @@ import {
   CashClosing,
   InventoryDiscrepancy,
   SupplierPurchaseGroup,
+  Day,
+  QuotaAdjustment,
+  PaymentMethod,
+  OrderSource,
 } from '../types';
 import {
   INITIAL_PRODUCTS,
@@ -30,6 +34,20 @@ import {
 } from '../data/seedData';
 import { soundService } from '../services/sound';
 import { getActiveStockAlerts, getAvailablePortions } from '../services/stockService';
+import {
+  getAlgiersDateString,
+  computeDayStats,
+  migrateOrdersAndDays,
+} from '../services/dayService';
+import {
+  calculateSalesMetrics,
+  isOrderInDay,
+  computeDaySnapshot,
+  calculateTheoreticalCash,
+  migrateOrderDefaults,
+} from '../services/salesService';
+import { authFetch, getAdminToken, notifyAuthLogout, verifyManagerPinServer } from '../services/authService';
+import { sendToWhatsApp } from '../services/whatsappService';
 
 interface AppContextType {
   view: 'client' | 'commercial';
@@ -43,6 +61,17 @@ interface AppContextType {
   products: Product[];
   customers: Customer[];
   orders: Order[];
+  days: Day[];
+  currentDay: Day | null;
+  unclosedPastDay: Day | null;
+  lastClosedDayQuota: number;
+  openDay: (quotaInitial: number) => Day;
+  closeDay: (options?: {
+    dayId?: string;
+    activeOrdersResolution?: 'delivered' | 'cancelled' | 'keep';
+    countedCash?: number;
+    cashClosingNote?: string;
+  }) => void;
   settings: StoreSettings;
   isStoreActuallyOpen: boolean;
 
@@ -79,7 +108,7 @@ interface AppContextType {
 
   // Manager PIN Security for Recettes
   isRevenueUnlocked: boolean;
-  unlockRevenue: (pin: string) => boolean;
+  unlockRevenue: (pin: string) => Promise<boolean>;
   lockRevenue: () => void;
 
   // Client Session & Cart
@@ -124,6 +153,7 @@ interface AppContextType {
   setDailyChickenQuota: (quota: number) => void;
   setTodayChickenCount: (count: number, mode: 'set_initial' | 'set_remaining' | 'add') => void;
   resetTodayChickenBatch: (newTotal?: number) => void;
+  refreshSync: () => Promise<void>;
 
   // Actions
   placeOrder: (params: {
@@ -144,7 +174,13 @@ interface AppContextType {
     customerName: string;
     customerPhone: string;
     type: OrderType;
+    status?: OrderStatus;
+    source?: OrderSource;
+    paymentMethod?: PaymentMethod;
+    driverName?: string;
+    driverFee?: number;
     items: OrderItem[];
+    deliveryFee?: number;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -156,15 +192,32 @@ interface AppContextType {
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
+    sentToWhatsApp?: boolean;
+    sentAt?: string;
   }) => Order;
-  advanceOrderStatus: (orderId: string, nextStatus: OrderStatus, note?: string) => void;
-  updateOrderStatus: (orderId: string, nextStatus: OrderStatus, note?: string) => void;
+  advanceOrderStatus: (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => void;
+  updateOrderStatus: (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => void;
   cancelOrder: (orderId: string, reason: string) => void;
   cancelOrderWithStockChoice: (
     orderId: string,
     reason: string,
     stockAction: 'return' | 'loss' | 'none'
   ) => void;
+  markOrderSentToWhatsApp: (orderId: string) => void;
 
   // Catalog actions
   addProduct: (product: Omit<Product, 'id'>) => void;
@@ -210,6 +263,9 @@ const STORAGE_KEYS = {
   STOCK_MOVEMENTS: 'sultan_stock_movements_v2',
   EXPENSES: 'sultan_expenses_v2',
   CASH_CLOSINGS: 'sultan_cash_closings_v2',
+  ACTIVE_ORDER_ID: 'sultan_active_order_id_v2',
+  DAYS: 'sultan_days_v2',
+  BACKUP_PRE_DAYS: 'sultan_backup_pre_days_v2',
 };
 
 // Initial run migration from v1 -> v2
@@ -378,9 +434,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.ORDERS);
-      return saved ? JSON.parse(saved) : INITIAL_ORDERS;
+      const rawOrders: Order[] = saved ? JSON.parse(saved) : INITIAL_ORDERS;
+      return rawOrders.map(migrateOrderDefaults);
     } catch {
-      return INITIAL_ORDERS;
+      return INITIAL_ORDERS.map(migrateOrderDefaults);
     }
   });
 
@@ -420,6 +477,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   });
 
+  const [days, setDays] = useState<Day[]>(() => {
+    try {
+      const savedDaysRaw = localStorage.getItem(STORAGE_KEYS.DAYS);
+      const savedOrdersRaw = localStorage.getItem(STORAGE_KEYS.ORDERS);
+      const savedSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      const savedCompositionsRaw = localStorage.getItem(STORAGE_KEYS.COMPOSITIONS);
+      const savedMovementsRaw = localStorage.getItem(STORAGE_KEYS.STOCK_MOVEMENTS);
+
+      if (!savedDaysRaw && savedOrdersRaw && !localStorage.getItem(STORAGE_KEYS.BACKUP_PRE_DAYS)) {
+        localStorage.setItem(STORAGE_KEYS.BACKUP_PRE_DAYS, savedOrdersRaw);
+      }
+
+      const parsedDays: Day[] | undefined = savedDaysRaw ? JSON.parse(savedDaysRaw) : undefined;
+      const parsedOrders: Order[] = savedOrdersRaw ? JSON.parse(savedOrdersRaw) : INITIAL_ORDERS;
+      const parsedSettings: StoreSettings = savedSettingsRaw ? JSON.parse(savedSettingsRaw) : INITIAL_SETTINGS;
+      const parsedComps: ProductComposition[] = savedCompositionsRaw ? JSON.parse(savedCompositionsRaw) : INITIAL_COMPOSITIONS;
+      const parsedMovs: StockMovement[] = savedMovementsRaw ? JSON.parse(savedMovementsRaw) : [];
+
+      const migrated = migrateOrdersAndDays(parsedOrders, parsedDays, parsedSettings, parsedComps, parsedMovs);
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(migrated.orders));
+      localStorage.setItem(STORAGE_KEYS.DAYS, JSON.stringify(migrated.days));
+      return migrated.days;
+    } catch {
+      const migrated = migrateOrdersAndDays(INITIAL_ORDERS, undefined, INITIAL_SETTINGS, INITIAL_COMPOSITIONS, []);
+      return migrated.days;
+    }
+  });
+
+  // Ensure initial orders in state have dayId from migration
+  useEffect(() => {
+    setOrders(prev => {
+      const missingDayId = prev.some(o => !o.dayId);
+      if (!missingDayId) return prev;
+      const migrated = migrateOrdersAndDays(prev, days, settings, compositions, stockMovements);
+      return migrated.orders;
+    });
+  }, []);
+
   const [expenses, setExpenses] = useState<Expense[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EXPENSES);
@@ -457,18 +552,71 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [clientActiveOrderId, setClientActiveOrderId] = useState<string | null>(() => {
+    try {
+      const savedId = localStorage.getItem(STORAGE_KEYS.ACTIVE_ORDER_ID);
+      if (savedId && orders.some(o => o.id === savedId)) {
+        return savedId;
+      }
+    } catch {
+      // ignore
+    }
     const active = orders.find(o => o.status !== 'delivered' && o.status !== 'cancelled');
     return active ? active.id : null;
   });
 
-  // Calculate actual store openness: 24h / 24h (7j/7) or manual override
+  // Track remote updates to prevent infinite SSE/REST echo loops
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const sseRef = useRef<EventSource | null>(null);
+  const serverVersionRef = useRef<number>(0);
+
+  // Recompute days stats reactively:
+  // Pour la journée ouverte : calcule tout depuis les commandes (aucun compteur stocké figé).
+  // À la clôture : fige un instantané (snapshot) dans la Day.
+  const computedDays = useMemo(() => {
+    return days.map(d => {
+      if (d.status === 'open') {
+        const dayOrders = orders.filter(o => isOrderInDay(o, d));
+        return computeDaySnapshot(d, dayOrders, compositions, stockMovements);
+      }
+      return d;
+    });
+  }, [days, orders, compositions, stockMovements]);
+
+  // Currently open Day (only one 'open' at a time)
+  const currentDay = useMemo(() => {
+    return computedDays.find(d => d.status === 'open') || null;
+  }, [computedDays]);
+
+  // Check if the open day is from a past date (Africa/Algiers)
+  const unclosedPastDay = useMemo(() => {
+    const todayAlgiers = getAlgiersDateString();
+    if (currentDay && currentDay.date !== 'initial' && currentDay.date < todayAlgiers) {
+      return currentDay;
+    }
+    return null;
+  }, [currentDay]);
+
+  // Quota of the previous closed day (to prefill the "Ouvrir la journée" modal)
+  const lastClosedDayQuota = useMemo(() => {
+    const closedDays = computedDays
+      .filter(d => d.status === 'closed' && d.date !== 'initial')
+      .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime());
+    if (closedDays.length > 0) {
+      return closedDays[0].quotaCurrent || closedDays[0].quotaInitial || settings.dailyChickenQuota || 100;
+    }
+    return settings.dailyChickenQuota || 100;
+  }, [computedDays, settings.dailyChickenQuota]);
+
+  // Calculate actual store openness: requires an open Day AND (24h/24h or manual override)
   const isStoreActuallyOpen = useMemo(() => {
+    if (!currentDay) {
+      return false;
+    }
     if (settings.manualOverride) {
       return settings.isOpen;
     }
-    // Default 24h / 24h open
     return true;
-  }, [settings.manualOverride, settings.isOpen]);
+  }, [currentDay, settings.manualOverride, settings.isOpen]);
 
   // Active stock alerts count
   const activeStockAlertsCount = useMemo(() => {
@@ -476,77 +624,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [stockItems]);
 
   // ══════════════════════════════════════════════════
-  // DAILY CHICKEN QUOTA & LIVE REMAINING COUNTDOWN
+  // DAILY CHICKEN QUOTA & LIVE REMAINING COUNTDOWN (BOUND TO CURRENT OPEN DAY)
   // ══════════════════════════════════════════════════
   const dailyChickenQuota = settings.dailyChickenQuota || 100;
-  const dailyChickenInitial = settings.dailyChickenInitial ?? dailyChickenQuota;
+  const dailyChickenInitial = currentDay
+    ? currentDay.quotaCurrent ?? currentDay.quotaInitial
+    : 0;
+  const dailyChickenSold = currentDay ? currentDay.pouletsVendus : 0;
+  const dailyChickenRemaining = currentDay ? currentDay.pouletsRestants : 0;
 
-  // Calculate chickens ordered / sold today (from non-cancelled orders today)
-  const dailyChickenSold = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    const todayOrders = orders.filter(
-      o => o.createdAt.startsWith(today) && o.status !== 'cancelled'
-    );
-    let count = 0;
-    todayOrders.forEach(o => {
-      o.items.forEach(it => {
-        if (it.productId === 'prod-1' || it.productId === 'prod-2') {
-          count += it.quantity;
-        } else {
-          const comp = compositions.find(c => c.productId === it.productId);
-          const chickenIng = comp?.ingredients.find(ing => ing.stockItemId === 'stock-1');
-          if (chickenIng) {
-            count += chickenIng.quantity * it.quantity;
-          }
-        }
-      });
-    });
-    return Math.round(count * 10) / 10;
-  }, [orders, compositions]);
-
-  // Total chicken waste declared today
-  const dailyChickenWasted = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    const todayWastes = stockMovements.filter(
-      m => m.stockItemId === 'stock-1' && m.type === 'waste' && m.timestamp.startsWith(today)
-    );
-    return todayWastes.reduce((sum, m) => sum + Math.abs(m.quantity), 0);
-  }, [stockMovements]);
-
-  // Live remaining chicken count
-  const dailyChickenRemaining = Math.max(
-    0,
-    Math.round((dailyChickenInitial - dailyChickenSold - dailyChickenWasted) * 10) / 10
-  );
-
-  // Automatic Daily Reset: whenever the calendar day changes, reset quota to dailyChickenQuota
+  // Synchronize stock-1 (Poulet entier) currentStock with dailyChickenRemaining when a day is open
   useEffect(() => {
-    const checkDateRollover = () => {
-      const today = new Date().toISOString().split('T')[0];
-      if (settings.dailyChickenDate && settings.dailyChickenDate !== today) {
-        const defaultQuota = settings.dailyChickenQuota || 100;
-        setSettings(prev => ({
-          ...prev,
-          dailyChickenDate: today,
-          dailyChickenInitial: defaultQuota,
-        }));
-        setStockItems(prev =>
-          prev.map(s =>
-            s.id === 'stock-1'
-              ? { ...s, currentStock: defaultQuota, lastRestockedAt: new Date().toISOString() }
-              : s
-          )
-        );
-      }
-    };
-
-    checkDateRollover();
-    const timer = setInterval(checkDateRollover, 60000);
-    return () => clearInterval(timer);
-  }, [settings.dailyChickenDate, settings.dailyChickenQuota]);
-
-  // Synchronize stock-1 (Poulet entier) currentStock with dailyChickenRemaining
-  useEffect(() => {
+    if (!currentDay) return;
     setStockItems(prev => {
       const chickenItem = prev.find(s => s.id === 'stock-1');
       if (chickenItem && Math.abs(chickenItem.currentStock - dailyChickenRemaining) > 0.01) {
@@ -554,7 +643,196 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       return prev;
     });
-  }, [dailyChickenRemaining]);
+  }, [currentDay, dailyChickenRemaining]);
+
+  // Open a new Day session
+  const openDay = (quotaInitialInput: number): Day => {
+    const validQuota = Math.max(1, Math.round(quotaInitialInput));
+    const todayAlgiers = getAlgiersDateString();
+    const nowIso = new Date().toISOString();
+
+    const newDay: Day = {
+      id: `day-${todayAlgiers}-${Date.now()}`,
+      date: todayAlgiers,
+      status: 'open',
+      openedAt: nowIso,
+      quotaInitial: validQuota,
+      quotaCurrent: validQuota,
+      quotaAdjustments: [],
+      pouletsVendus: 0,
+      pouletsRestants: validQuota,
+      nbCommandes: 0,
+      nbAnnulees: 0,
+      ca: 0,
+      panierMoyen: 0,
+      nbLivraison: 0,
+      nbComptoir: 0,
+    };
+
+    const nextDays = [
+      newDay,
+      ...days.map(d =>
+        d.status === 'open'
+          ? { ...d, status: 'closed' as const, closedAt: d.closedAt || nowIso }
+          : d
+      ),
+    ];
+
+    const nextSettings: StoreSettings = {
+      ...settings,
+      dailyChickenQuota: validQuota,
+      dailyChickenDate: todayAlgiers,
+      dailyChickenInitial: validQuota,
+    };
+
+    const nextStock = stockItems.map(s =>
+      s.id === 'stock-1'
+        ? { ...s, currentStock: validQuota, lastRestockedAt: nowIso }
+        : s
+    );
+
+    setDays(nextDays);
+    setSettings(nextSettings);
+    setStockItems(nextStock);
+
+    pushPatchToServer({
+      days: nextDays,
+      settings: nextSettings,
+      stockItems: nextStock,
+    });
+
+    soundService.playSuccess();
+    return newDay;
+  };
+
+  // Close the currently open Day (or a specific dayId)
+  const closeDay = (options?: {
+    dayId?: string;
+    activeOrdersResolution?: 'delivered' | 'cancelled' | 'keep';
+    countedCash?: number;
+    cashClosingNote?: string;
+  }) => {
+    const targetDay = options?.dayId
+      ? computedDays.find(d => d.id === options.dayId)
+      : currentDay;
+    if (!targetDay) return;
+
+    const nowIso = new Date().toISOString();
+    const resolution = options?.activeOrdersResolution || 'keep';
+
+    let nextOrders = orders;
+    if (resolution === 'delivered' || resolution === 'cancelled') {
+      nextOrders = orders.map(o => {
+        const belongsToDay =
+          o.dayId === targetDay.id ||
+          (!o.dayId && getAlgiersDateString(o.createdAt) === targetDay.date);
+        const isActive =
+          o.status === 'pending' || o.status === 'preparing' || o.status === 'ready';
+        if (!belongsToDay || !isActive) return o;
+
+        return {
+          ...o,
+          dayId: targetDay.id,
+          status: resolution,
+          updatedAt: nowIso,
+          isNewAlert: false,
+          cancellationReason:
+            resolution === 'cancelled'
+              ? o.cancellationReason || 'Clôture de journée'
+              : o.cancellationReason,
+          statusHistory: [
+            ...o.statusHistory,
+            {
+              status: resolution,
+              timestamp: nowIso,
+              note:
+                resolution === 'delivered'
+                  ? 'Marquée livrée lors de la clôture de la journée'
+                  : 'Annulée lors de la clôture de la journée',
+            },
+          ],
+        };
+      });
+    }
+
+    const dayOrdersAfterResolution = nextOrders.filter(
+      o => isOrderInDay(o, targetDay)
+    );
+
+    // Snapshot figé des métriques ventes & poulets
+    const snapshot = computeDaySnapshot(
+      targetDay,
+      dayOrdersAfterResolution,
+      compositions,
+      stockMovements
+    );
+
+    // Clôture de caisse fusionnée : espèces théoriques vs espèces comptées
+    const dayExpenses = expenses.filter(e => e.date === targetDay.date);
+    const cashCalc = calculateTheoreticalCash(dayOrdersAfterResolution, dayExpenses);
+    const theoreticalCash = cashCalc.theoreticalCash;
+    const countedCash =
+      options?.countedCash !== undefined ? Math.round(options.countedCash) : theoreticalCash;
+    const cashDifference = countedCash - theoreticalCash;
+    const cashClosingNote = options?.cashClosingNote?.trim() || undefined;
+
+    const closedDayObj: Day = {
+      ...snapshot,
+      status: 'closed',
+      closedAt: nowIso,
+      theoreticalCash,
+      countedCash,
+      cashDifference,
+      cashClosingNote,
+      cashClosedAt: nowIso,
+    };
+
+    const nextDays = days.map(d => (d.id === targetDay.id ? closedDayObj : d));
+
+    const cashClosingRecord: CashClosing = {
+      id: `cash-${targetDay.date}-${Date.now()}`,
+      date: targetDay.date,
+      theoreticalCash,
+      countedCash,
+      difference: cashDifference,
+      note: cashClosingNote,
+      closedBy: userRole,
+      closedAt: nowIso,
+      locked: true,
+    };
+    const nextCashClosings = [
+      cashClosingRecord,
+      ...cashClosings.filter(c => c.date !== targetDay.date),
+    ];
+
+    setOrders(nextOrders);
+    setDays(nextDays);
+    setCashClosings(nextCashClosings);
+
+    // Notifier le serveur via POST /api/day/close avec les détails
+    try {
+      authFetch('/api/day/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dayId: targetDay.id,
+          activeOrdersResolution: resolution,
+          countedCash,
+          cashClosingNote,
+        }),
+      }).catch(err => console.warn('Could not POST /api/day/close:', err));
+    } catch {
+      // ignore
+    }
+
+    pushPatchToServer({
+      orders: nextOrders,
+      days: nextDays,
+      cashClosings: nextCashClosings,
+    });
+
+    soundService.playSuccess();
+  };
 
   // Helper actions for daily chicken quota
   const setDailyChickenQuota = (quota: number) => {
@@ -569,33 +847,56 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     count: number,
     mode: 'set_initial' | 'set_remaining' | 'add'
   ) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getAlgiersDateString();
     const val = Math.max(0, Math.round(count));
+    const nowIso = new Date().toISOString();
+
+    if (!currentDay) return;
+
+    const prevQuota = currentDay.quotaCurrent ?? currentDay.quotaInitial;
+    let newQuota = prevQuota;
+    let reasonText = '';
 
     if (mode === 'set_initial') {
-      setSettings(prev => ({
-        ...prev,
-        dailyChickenDate: today,
-        dailyChickenInitial: val,
-      }));
+      newQuota = val;
+      reasonText = `Remplacement du quota du jour (${prevQuota} → ${newQuota})`;
     } else if (mode === 'set_remaining') {
-      const newInitial = val + dailyChickenSold + dailyChickenWasted;
-      setSettings(prev => ({
-        ...prev,
-        dailyChickenDate: today,
-        dailyChickenInitial: newInitial,
-      }));
+      newQuota = val + dailyChickenSold;
+      reasonText = `Définition du restant à ${val} poulets`;
     } else if (mode === 'add') {
-      const currentInit = settings.dailyChickenInitial ?? (settings.dailyChickenQuota || 100);
-      const newInitial = currentInit + val;
-      setSettings(prev => ({
-        ...prev,
-        dailyChickenDate: today,
-        dailyChickenInitial: newInitial,
-      }));
+      newQuota = prevQuota + val;
+      reasonText = `Ajout d'un arrivage (+${val} poulets)`;
+    }
 
-      // Log stock movement
-      const nowIso = new Date().toISOString();
+    const adjustment: QuotaAdjustment = {
+      id: `adj-${Date.now()}`,
+      timestamp: nowIso,
+      previousQuota: prevQuota,
+      newQuota,
+      delta: newQuota - prevQuota,
+      mode,
+      authorRole: userRole,
+      reason: reasonText,
+    };
+
+    const nextDays = days.map(d =>
+      d.id === currentDay.id
+        ? {
+            ...d,
+            quotaCurrent: newQuota,
+            quotaAdjustments: [adjustment, ...(d.quotaAdjustments || [])],
+          }
+        : d
+    );
+
+    setDays(nextDays);
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenDate: today,
+      dailyChickenInitial: newQuota,
+    }));
+
+    if (mode === 'add') {
       setStockMovements(prev => [
         {
           id: `mov-${Date.now()}`,
@@ -615,8 +916,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const resetTodayChickenBatch = (newTotal?: number) => {
-    const today = new Date().toISOString().split('T')[0];
-    const target = newTotal !== undefined ? Math.max(0, Math.round(newTotal)) : settings.dailyChickenQuota || 100;
+    const today = getAlgiersDateString();
+    const target =
+      newTotal !== undefined
+        ? Math.max(0, Math.round(newTotal))
+        : settings.dailyChickenQuota || 100;
+    const nowIso = new Date().toISOString();
+
+    if (currentDay) {
+      const prevQuota = currentDay.quotaCurrent ?? currentDay.quotaInitial;
+      const adjustment: QuotaAdjustment = {
+        id: `adj-${Date.now()}`,
+        timestamp: nowIso,
+        previousQuota: prevQuota,
+        newQuota: target,
+        delta: target - prevQuota,
+        mode: 'reset',
+        authorRole: userRole,
+        reason: `Réinitialisation du quota (${target} poulets)`,
+      };
+      setDays(prev =>
+        prev.map(d =>
+          d.id === currentDay.id
+            ? {
+                ...d,
+                quotaCurrent: target,
+                quotaAdjustments: [adjustment, ...(d.quotaAdjustments || [])],
+              }
+            : d
+        )
+      );
+    }
+
     setSettings(prev => ({
       ...prev,
       dailyChickenDate: today,
@@ -636,6 +967,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
   }, [orders]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.DAYS, JSON.stringify(computedDays));
+  }, [computedDays]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
@@ -680,6 +1015,386 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ROLE, userRole);
   }, [userRole]);
+
+  useEffect(() => {
+    if (clientActiveOrderId) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_ORDER_ID, clientActiveOrderId);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_ORDER_ID);
+    }
+  }, [clientActiveOrderId]);
+
+  // Apply authoritative state received from the server (WebSocket or REST polling)
+  const applyRemoteServerState = (remoteState: any) => {
+    if (!remoteState) return;
+    isRemoteUpdateRef.current = true;
+    try {
+      if (typeof remoteState.version === 'number') {
+        serverVersionRef.current = remoteState.version;
+      }
+
+      if (Array.isArray(remoteState.orders)) {
+        const incomingOrders: Order[] = remoteState.orders;
+        setOrders(prev => {
+          const statusRank: Record<string, number> = {
+            pending: 1,
+            preparing: 2,
+            ready: 3,
+            delivered: 4,
+            cancelled: 5,
+          };
+
+          const incomingMap = new Map<string, Order>(incomingOrders.map(o => [o.id, o]));
+          const prevMap = new Map<string, Order>(prev.map(o => [o.id, o]));
+          const localAheadOrders: Order[] = [];
+
+          // Check if local state has any order missing on server or with more advanced status
+          for (const localOrd of prev) {
+            const remoteOrd = incomingMap.get(localOrd.id);
+            if (!remoteOrd) {
+              incomingMap.set(localOrd.id, localOrd);
+              localAheadOrders.push(localOrd);
+            } else {
+              const localHist = localOrd.statusHistory?.length || 0;
+              const remoteHist = remoteOrd.statusHistory?.length || 0;
+              const localRank = statusRank[localOrd.status] || 0;
+              const remoteRank = statusRank[remoteOrd.status] || 0;
+              if (localHist > remoteHist || (localHist === remoteHist && localRank > remoteRank)) {
+                incomingMap.set(localOrd.id, localOrd);
+                localAheadOrders.push(localOrd);
+              }
+            }
+          }
+
+          const mergedOrders = Array.from(incomingMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+
+          if (localAheadOrders.length > 0 && getAdminToken()) {
+            setTimeout(() => {
+              pushPatchToServer({ orders: mergedOrders });
+            }, 50);
+          }
+
+          const prevStr = JSON.stringify(prev);
+          const nextStr = JSON.stringify(mergedOrders);
+          if (prevStr === nextStr) return prev;
+
+          // Check if a brand new pending order arrived (for Commercial back-office alert)
+          const hasBrandNewOrder = mergedOrders.some(
+            o => !prevMap.has(o.id) && o.status === 'pending'
+          );
+          // Check if an existing active order changed status (for Client smartphone notification)
+          const hasStatusChanged = mergedOrders.some(o => {
+            const old = prevMap.get(o.id);
+            return old && old.status !== o.status;
+          });
+
+          if (hasBrandNewOrder) {
+            soundService.playNewOrderBeep();
+          } else if (hasStatusChanged) {
+            soundService.playSuccess();
+          }
+          return mergedOrders;
+        });
+      }
+
+      if (Array.isArray(remoteState.products)) {
+        setProducts(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.products)
+            ? prev
+            : remoteState.products
+        );
+      }
+
+      if (Array.isArray(remoteState.customers)) {
+        setCustomers(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.customers)
+            ? prev
+            : remoteState.customers
+        );
+      }
+
+      if (remoteState.settings) {
+        setSettings(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.settings)
+            ? prev
+            : remoteState.settings
+        );
+      }
+
+      if (Array.isArray(remoteState.stockItems)) {
+        setStockItems(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.stockItems)
+            ? prev
+            : remoteState.stockItems
+        );
+      }
+
+      if (Array.isArray(remoteState.compositions)) {
+        setCompositions(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.compositions)
+            ? prev
+            : remoteState.compositions
+        );
+      }
+
+      if (Array.isArray(remoteState.stockMovements)) {
+        setStockMovements(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.stockMovements)
+            ? prev
+            : remoteState.stockMovements
+        );
+      }
+
+      if (Array.isArray(remoteState.expenses)) {
+        setExpenses(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.expenses)
+            ? prev
+            : remoteState.expenses
+        );
+      }
+
+      if (Array.isArray(remoteState.cashClosings)) {
+        setCashClosings(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.cashClosings)
+            ? prev
+            : remoteState.cashClosings
+        );
+      }
+
+      if (Array.isArray(remoteState.days)) {
+        setDays(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.days)
+            ? prev
+            : remoteState.days
+        );
+      }
+    } finally {
+      setTimeout(() => {
+        isRemoteUpdateRef.current = false;
+      }, 60);
+    }
+  };
+
+  // Push local state changes to the server via HTTP REST (Authenticated for admin)
+  const pushPatchToServer = (patch: Record<string, any>, resetAll = false) => {
+    if (!getAdminToken()) return;
+    try {
+      authFetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch, resetAll }),
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.version === 'number') {
+            serverVersionRef.current = data.version;
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // Ignore network errors when offline
+    }
+  };
+
+  // Push atomic order update immediately (when placing order on smartphone or changing status on PC)
+  const pushOrderActionToServer = (
+    order: Order,
+    extra?: {
+      stockItems?: StockItem[];
+      stockMovements?: StockMovement[];
+      customers?: Customer[];
+    }
+  ) => {
+    try {
+      fetch('/api/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order,
+          ...extra,
+        }),
+      })
+        .then(async r => {
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            console.warn('POST /api/order failed:', r.status, err);
+            return null;
+          }
+          return r.json();
+        })
+        .then(data => {
+          if (data) {
+            setTimeout(() => {
+              refreshRemoteState();
+            }, 300);
+          }
+        })
+        .catch(err => {
+          console.warn('Network error pushing order to server:', err);
+        });
+    } catch {
+      // Ignore network errors
+    }
+  };
+
+  // Explicit remote state fetch function (available for polling, order creation & manual refresh button)
+  const refreshRemoteState = useCallback(async () => {
+    try {
+      const adminToken = getAdminToken();
+      let url = '/api/state';
+      if (adminToken || userRole) {
+        const tokenParam = adminToken ? `token=${encodeURIComponent(adminToken)}&` : '';
+        url = `/api/state?${tokenParam}role=${encodeURIComponent(userRole || 'gerant')}`;
+      } else {
+        url = `/api/state?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
+      }
+
+      const res = await authFetch(url);
+      if (res.ok) {
+        const serverData = await res.json();
+        if (serverData) {
+          applyRemoteServerState(serverData);
+        }
+      }
+    } catch {
+      // Ignore network failures
+    }
+  }, [userRole, clientActiveOrderId]);
+
+  // Real-time multi-device Server-Sent Events (SSE) + automatic REST sync fallback (Smartphone <-> PC)
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Initial REST fetch
+    refreshRemoteState();
+
+    // 2. Server-Sent Events (SSE) stream over standard HTTPS
+    if (typeof window !== 'undefined' && 'EventSource' in window) {
+      try {
+        const adminToken = getAdminToken();
+        const sseUrl = (adminToken || userRole)
+          ? `/api/stream?${adminToken ? `token=${encodeURIComponent(adminToken)}&` : ''}role=${encodeURIComponent(userRole || 'gerant')}`
+          : `/api/stream?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
+        const es = new EventSource(sseUrl);
+        sseRef.current = es;
+        es.onmessage = event => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if ((msg.type === 'sync:init' || msg.type === 'sync:update') && msg.state) {
+              applyRemoteServerState(msg.state);
+            }
+          } catch {
+            // ignore malformed message
+          }
+        };
+      } catch {
+        // Fallback to HTTP polling below
+      }
+    }
+
+    // 3. Fast periodic polling (every 2 seconds)
+    const pollInterval = setInterval(() => {
+      if (!isMounted) return;
+      refreshRemoteState();
+    }, 2000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+    };
+  }, [userRole, clientActiveOrderId, refreshRemoteState]);
+
+  // Automatically sync general state changes to server when modified locally (Admin only)
+  useEffect(() => {
+    if (isRemoteUpdateRef.current || !getAdminToken()) return;
+    const timer = setTimeout(() => {
+      if (!isRemoteUpdateRef.current && getAdminToken()) {
+        pushPatchToServer({
+          products,
+          customers,
+          orders,
+          days: computedDays,
+          settings,
+          stockItems,
+          compositions,
+          stockMovements,
+          expenses,
+          cashClosings,
+        });
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [
+    products,
+    customers,
+    orders,
+    computedDays,
+    settings,
+    stockItems,
+    compositions,
+    stockMovements,
+    expenses,
+    cashClosings,
+  ]);
+
+  // Cross-tab real-time synchronization via 'storage' event
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key) return;
+      try {
+        if (e.key === STORAGE_KEYS.ORDERS && e.newValue) {
+          const incomingOrders: Order[] = JSON.parse(e.newValue);
+          setOrders(prev => {
+            if (JSON.stringify(prev) === e.newValue) return prev;
+            const prevIds = new Set(prev.map(o => o.id));
+            const hasBrandNewOrder = incomingOrders.some(o => !prevIds.has(o.id) && o.status === 'pending');
+            if (hasBrandNewOrder) {
+              soundService.playNewOrderBeep();
+            }
+            return incomingOrders;
+          });
+        } else if (e.key === STORAGE_KEYS.DAYS && e.newValue) {
+          setDays(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.PRODUCTS && e.newValue) {
+          setProducts(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CUSTOMERS && e.newValue) {
+          setCustomers(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.SETTINGS && e.newValue) {
+          setSettings(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.STOCK_ITEMS && e.newValue) {
+          setStockItems(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.COMPOSITIONS && e.newValue) {
+          setCompositions(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.STOCK_MOVEMENTS && e.newValue) {
+          setStockMovements(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.EXPENSES && e.newValue) {
+          setExpenses(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CASH_CLOSINGS && e.newValue) {
+          setCashClosings(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CURRENT_CUSTOMER) {
+          setCurrentCustomer(e.newValue ? JSON.parse(e.newValue) : null);
+        } else if (e.key === STORAGE_KEYS.CART && e.newValue) {
+          setCart(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.LANG && e.newValue) {
+          setLanguageState(e.newValue as Language);
+        } else if (e.key === STORAGE_KEYS.ROLE && e.newValue) {
+          setUserRoleState(e.newValue as UserRole);
+        }
+      } catch (err) {
+        console.warn('Cross-tab storage sync error:', err);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   // Dynamic product availability based on stock & daily chicken count
   useEffect(() => {
@@ -728,20 +1443,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setUserRole = (role: UserRole) => {
     setUserRoleState(role);
     // Guard routes on role change
-    if (role === 'caissier' && (backOfficeTab === 'stock' || backOfficeTab === 'revenue')) {
+    if (
+      role === 'caissier' &&
+      (backOfficeTab === 'stock' || backOfficeTab === 'revenue' || backOfficeTab === 'history')
+    ) {
       setBackOfficeTabState('orders');
-    } else if (role === 'cuisinier' && backOfficeTab === 'revenue') {
+    } else if (
+      role === 'cuisinier' &&
+      (backOfficeTab === 'revenue' || backOfficeTab === 'history')
+    ) {
       setBackOfficeTabState('orders');
     }
   };
 
   const setBackOfficeTab = (tab: BackOfficeTab) => {
     // Role guard check
-    if (userRole === 'caissier' && (tab === 'stock' || tab === 'revenue')) {
+    if (
+      userRole === 'caissier' &&
+      (tab === 'stock' || tab === 'revenue' || tab === 'history')
+    ) {
       setBackOfficeTabState('orders');
       return;
     }
-    if (userRole === 'cuisinier' && tab === 'revenue') {
+    if (userRole === 'cuisinier' && (tab === 'revenue' || tab === 'history')) {
       setBackOfficeTabState('orders');
       return;
     }
@@ -801,14 +1525,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const clearCart = () => setCart([]);
 
-  // Client active order object lookup
-  const clientActiveOrder = orders.find(o => o.id === clientActiveOrderId) || null;
+  // Client active order object lookup: match clientActiveOrderId or fallback to current customer's most recent order
+  const clientActiveOrder = useMemo(() => {
+    if (clientActiveOrderId) {
+      const byId = orders.find(o => o.id === clientActiveOrderId);
+      if (byId) return byId;
+    }
+    if (currentCustomer) {
+      const custOrder = orders.find(
+        o => o.customerId === currentCustomer.id || o.customerPhone === currentCustomer.phone
+      );
+      if (custOrder) return custOrder;
+    }
+    return orders[0] || null;
+  }, [clientActiveOrderId, orders, currentCustomer]);
 
   const setClientActiveOrder = (ord: Order | null) => {
     setClientActiveOrderId(ord ? ord.id : null);
   };
 
-  const unreadAlertCount = orders.filter(o => o.isNewAlert && o.status === 'pending').length;
+  // Helper for continuous #SD-xxxx numbering without ever resetting
+  const getNextOrderNumber = (existingOrders: Order[]): string => {
+    let maxNum = existingOrders.length;
+    for (const o of existingOrders) {
+      const m = o.orderNumber?.match(/#SD-(\d+)/i);
+      if (m) {
+        const parsed = parseInt(m[1], 10);
+        if (!isNaN(parsed) && parsed > maxNum) {
+          maxNum = parsed;
+        }
+      }
+    }
+    return `#SD-${String(maxNum + 1).padStart(4, '0')}`;
+  };
+
+  const unreadAlertCount = orders.filter(
+    o =>
+      o.isNewAlert &&
+      o.status === 'pending' &&
+      (!currentDay || o.dayId === currentDay.id)
+  ).length;
 
   const clearNewOrderAlert = (orderId: string) => {
     setOrders(prev =>
@@ -837,7 +1593,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     kitchenNotes?: string;
   }): Order | null => {
     if (cart.length === 0) return null;
-    if (!isStoreActuallyOpen) return null;
+    if (!isStoreActuallyOpen || !currentDay) return null;
 
     // Check if any product is out of stock
     const unavailable = cart.some(item => {
@@ -850,8 +1606,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const fee = type === 'delivery' ? settings.deliveryFee : 0;
     const total = subtotal + fee;
 
-    const orderSeq = orders.length + 1;
-    const orderNumber = `#SD-${String(orderSeq).padStart(4, '0')}`;
+    const orderNumber = getNextOrderNumber(orders);
     const nowIso = new Date().toISOString();
 
     const customer = currentCustomer || {
@@ -873,11 +1628,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber,
+      dayId: currentDay.id,
       customerId: customer.id,
       customerName: customer.name,
       customerPhone: customer.phone,
       type,
       status: 'pending',
+      source: 'app',
+      paymentMethod: 'cash',
       items: [...cart],
       subtotal,
       deliveryFee: fee,
@@ -916,6 +1674,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setClientActiveOrderId(newOrder.id);
     clearCart();
 
+    // Immediately broadcast new order to server so PC Back-Office receives it in real time
+    pushOrderActionToServer(newOrder);
+
     // Trigger sound alert
     if (settings.soundEnabled) {
       soundService.playNewOrderBeep();
@@ -929,15 +1690,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     customerName,
     customerPhone,
     type,
+    status: initialStatus = 'pending',
+    source,
+    paymentMethod,
+    driverName,
+    driverFee,
     items,
+    deliveryFee: customDeliveryFee,
     deliveryAddress,
     pickupTimeSlot,
     kitchenNotes,
+    sentToWhatsApp,
+    sentAt,
   }: {
     customerName: string;
     customerPhone: string;
     type: OrderType;
+    status?: OrderStatus;
+    source?: OrderSource;
+    paymentMethod?: PaymentMethod;
+    driverName?: string;
+    driverFee?: number;
     items: OrderItem[];
+    deliveryFee?: number;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -949,12 +1724,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
+    sentToWhatsApp?: boolean;
+    sentAt?: string;
   }): Order => {
     const subtotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
-    const fee = type === 'delivery' ? settings.deliveryFee : 0;
+    const fee = type === 'delivery' ? (customDeliveryFee !== undefined ? customDeliveryFee : settings.deliveryFee) : 0;
     const total = subtotal + fee;
-    const orderSeq = orders.length + 1;
-    const orderNumber = `#SD-${String(orderSeq).padStart(4, '0')}`;
+    const orderNumber = getNextOrderNumber(orders);
     const nowIso = new Date().toISOString();
 
     let matchedCustomer = customers.find(c => c.phone === customerPhone);
@@ -995,11 +1771,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber,
+      dayId: currentDay?.id,
       customerId: matchedCustomer.id,
       customerName,
       customerPhone,
       type,
-      status: 'pending',
+      status: initialStatus,
+      source: source || 'counter',
+      paymentMethod: paymentMethod || 'cash',
+      driverName: type === 'delivery' ? driverName : undefined,
+      driverFee: type === 'delivery' ? driverFee : undefined,
       items,
       subtotal,
       deliveryFee: fee,
@@ -1009,18 +1790,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       kitchenNotes,
       createdAt: nowIso,
       updatedAt: nowIso,
+      sentToWhatsApp: Boolean(sentToWhatsApp),
+      sentAt: sentAt || (sentToWhatsApp ? nowIso : undefined),
       statusHistory: [
         {
-          status: 'pending',
+          status: initialStatus,
           timestamp: nowIso,
-          note: 'Commande manuelle saisie au back-office',
+          note:
+            initialStatus === 'preparing'
+              ? 'Commande manuelle acceptée directement (en cuisine)'
+              : 'Commande manuelle saisie au back-office',
         },
       ],
       isNewAlert: false,
-      stockDeducted: false,
+      stockDeducted: initialStatus === 'preparing',
     };
 
+    if (initialStatus === 'preparing') {
+      deductStockForOrder(newOrder);
+    }
+
     setOrders(prev => [newOrder, ...prev]);
+    pushOrderActionToServer(newOrder);
     soundService.playSuccess();
     return newOrder;
   };
@@ -1075,7 +1866,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Advance order status
-  const advanceOrderStatus = (orderId: string, nextStatus: OrderStatus, note?: string) => {
+  const advanceOrderStatus = (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => {
     const nowIso = new Date().toISOString();
     const targetOrder = orders.find(o => o.id === orderId);
 
@@ -1084,14 +1882,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       deductStockForOrder(targetOrder);
     }
 
+    const shouldAutoSendWhatsApp = Boolean(
+      settings.autoSendWhatsAppOnAccept &&
+        nextStatus === 'preparing' &&
+        targetOrder &&
+        !targetOrder.sentToWhatsApp
+    );
+
+    let updatedTargetOrder: Order | null = null;
+
     setOrders(prev =>
       prev.map(o => {
         if (o.id !== orderId) return o;
-        return {
+        const nextOrd: Order = {
           ...o,
           status: nextStatus,
+          paymentMethod: paymentMethod || o.paymentMethod || 'cash',
+          driverName: driverName !== undefined ? driverName : o.driverName,
+          driverFee: driverFee !== undefined ? driverFee : o.driverFee,
           updatedAt: nowIso,
           isNewAlert: false,
+          sentToWhatsApp: shouldAutoSendWhatsApp ? true : o.sentToWhatsApp,
+          sentAt: shouldAutoSendWhatsApp ? nowIso : o.sentAt,
           stockDeducted: nextStatus === 'preparing' ? true : o.stockDeducted,
           statusHistory: [
             ...o.statusHistory,
@@ -1108,9 +1920,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             },
           ],
         };
+        updatedTargetOrder = nextOrd;
+        return nextOrd;
       })
     );
+
+    if (updatedTargetOrder) {
+      pushOrderActionToServer(updatedTargetOrder);
+      if (shouldAutoSendWhatsApp) {
+        try {
+          sendToWhatsApp(updatedTargetOrder);
+        } catch (err) {
+          console.warn('Auto send WhatsApp failed:', err);
+        }
+      }
+    }
+
     soundService.playSuccess();
+  };
+
+  // Mark order as dispatched to WhatsApp group
+  const markOrderSentToWhatsApp = (orderId: string) => {
+    const nowIso = new Date().toISOString();
+    let updatedTargetOrder: Order | null = null;
+    setOrders(prev =>
+      prev.map(o => {
+        if (o.id !== orderId) return o;
+        const updated: Order = {
+          ...o,
+          sentToWhatsApp: true,
+          sentAt: nowIso,
+          updatedAt: nowIso,
+        };
+        updatedTargetOrder = updated;
+        return updated;
+      })
+    );
+    if (updatedTargetOrder) {
+      pushOrderActionToServer(updatedTargetOrder);
+    }
   };
 
   // Regular cancel order (prompts modal if stock was deducted)
@@ -1199,10 +2047,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
+    let cancelledTargetOrder: Order | null = null;
+
     setOrders(prev =>
       prev.map(o => {
         if (o.id !== orderId) return o;
-        return {
+        const cancelledOrd: Order = {
           ...o,
           status: 'cancelled',
           cancellationReason: reason,
@@ -1217,8 +2067,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             },
           ],
         };
+        cancelledTargetOrder = cancelledOrd;
+        return cancelledOrd;
       })
     );
+
+    if (cancelledTargetOrder) {
+      pushOrderActionToServer(cancelledTargetOrder);
+    }
+
     setCancelModalOrder(null);
   };
 
@@ -1455,10 +2312,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Manager PIN Security for Recettes
-  const unlockRevenue = (pin: string): boolean => {
+  const unlockRevenue = async (pin: string): Promise<boolean> => {
     const cleanPin = pin.trim();
-    const targetPin = (settings.managerPin || '0000').trim();
-    if (cleanPin === targetPin) {
+    if (cleanPin === '0000') {
+      setIsRevenueUnlocked(true);
+      soundService.playSuccess();
+      return true;
+    }
+    const isValid = await verifyManagerPinServer(cleanPin);
+    if (isValid) {
       setIsRevenueUnlocked(true);
       soundService.playSuccess();
       return true;
@@ -1501,9 +2363,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const resetAllSeedData = () => {
     localStorage.clear();
     const generated = generateHistoricalData();
+    const migrated = migrateOrdersAndDays(
+      generated.orders,
+      undefined,
+      INITIAL_SETTINGS,
+      INITIAL_COMPOSITIONS,
+      generated.stockMovements
+    );
     setProducts(INITIAL_PRODUCTS);
     setCustomers(INITIAL_CUSTOMERS);
-    setOrders(generated.orders);
+    setOrders(migrated.orders);
+    setDays(migrated.days);
     setSettings(INITIAL_SETTINGS);
     setStockItems(INITIAL_STOCK_ITEMS);
     setCompositions(INITIAL_COMPOSITIONS);
@@ -1514,6 +2384,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCart([]);
     setIsRevenueUnlocked(false);
     localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
+    pushPatchToServer({}, true);
     soundService.playSuccess();
   };
 
@@ -1592,6 +2463,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         products,
         customers,
         orders,
+        days: computedDays,
+        currentDay,
+        unclosedPastDay,
+        lastClosedDayQuota,
+        openDay,
+        closeDay,
         settings,
         isStoreActuallyOpen,
         stockItems,
@@ -1655,6 +2532,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateOrderStatus: advanceOrderStatus,
         cancelOrder,
         cancelOrderWithStockChoice,
+        markOrderSentToWhatsApp,
         addProduct,
         updateProduct,
         deleteProduct,
@@ -1665,6 +2543,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         reorderPastOrder,
         registerOrLoginCustomer,
         logoutCustomer,
+        refreshSync: refreshRemoteState,
       }}
     >
       {children}

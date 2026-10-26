@@ -13,6 +13,8 @@ import {
   Phone,
   MapPin,
   Volume2,
+  MessageCircle,
+  ExternalLink,
 } from 'lucide-react';
 
 export const CommercialSettings: React.FC = () => {
@@ -34,6 +36,12 @@ export const CommercialSettings: React.FC = () => {
   const [openTime, setOpenTime] = useState(settings.openTime);
   const [closeTime, setCloseTime] = useState(settings.closeTime);
   const [dailyChickenQuota, setDailyChickenQuota] = useState(settings.dailyChickenQuota || 100);
+  const [autoSendWhatsAppOnAccept, setAutoSendWhatsAppOnAccept] = useState(
+    Boolean(settings.autoSendWhatsAppOnAccept)
+  );
+  const [whatsAppGroupInviteUrl, setWhatsAppGroupInviteUrl] = useState(
+    settings.whatsAppGroupInviteUrl || ''
+  );
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
@@ -47,6 +55,8 @@ export const CommercialSettings: React.FC = () => {
       openTime,
       closeTime,
       dailyChickenQuota: Math.max(0, Math.round(dailyChickenQuota)),
+      autoSendWhatsAppOnAccept,
+      whatsAppGroupInviteUrl: whatsAppGroupInviteUrl.trim(),
     });
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
@@ -119,7 +129,40 @@ export const CommercialSettings: React.FC = () => {
               ? (isArabic ? 'استقبال الطلبات مفعل' : 'Le client peut commander')
               : (isArabic ? 'الطلبات متوقفة حالياً' : 'Commandes bloquées')}
           </strong>{' '}
-          {isArabic ? '(بناءً على التحكم وساعات العمل 13:00 - 00:00)' : '(basé sur le commutateur et les horaires 13h–00h).'}
+          {isArabic ? '(مفتوح 24 سا / 24 سا إلا عند نفاد كمية الدجاج اليومية)' : '(Ouvert 24h/24 sauf épuisement du stock journalier).'}
+        </div>
+      </div>
+
+      {/* Admin PIN Gate Configuration */}
+      <div className="bg-zinc-900/90 rounded-2xl p-4 border border-zinc-800 space-y-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <h3 className="text-sm font-bold text-white">
+              {isArabic ? 'حماية الدخول إلى الإدارة (/admin) برمز PIN' : 'Verrouillage par PIN sur /admin'}
+            </h3>
+            <p className="text-xs text-zinc-400">
+              {isArabic
+                ? 'تفعيل شاشة اختيار الدور وإدخال رمز PIN عند فتح رابط الإدارة (المدير: 0000، الطباخ: 1111، الكاشير: 2222).'
+                : 'Activer l\'écran de connexion par PIN à l\'ouverture de /admin (Gérant : 0000, Cuisinier : 1111, Caissier : 2222).'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateSettings({ requireAdminPin: !settings.requireAdminPin })}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition shrink-0 ${
+              settings.requireAdminPin
+                ? 'bg-orange-600 text-white border-orange-500 shadow-md'
+                : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
+            }`}
+          >
+            {settings.requireAdminPin
+              ? isArabic
+                ? 'PIN مفعّل'
+                : 'PIN Activé'
+              : isArabic
+              ? 'تفعيل PIN'
+              : 'Activer PIN'}
+          </button>
         </div>
       </div>
 
@@ -232,6 +275,87 @@ export const CommercialSettings: React.FC = () => {
                 ? 'يتم تجديد هذا العدد تلقائياً كل يوم عند بداية الخدمة (مثال: 100 دجاجة). هذا العدد لا يظهر للزبون.'
                 : 'Ce quota est réinitialisé automatiquement chaque jour (ex: 100 poulets). Ce nombre reste confidentiel et ne s\'affiche pas au client.'}
             </p>
+          </div>
+
+          {/* WhatsApp Dispatch Group Settings */}
+          <div className="md:col-span-2 pt-3 border-t border-zinc-800 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-emerald-400" />
+              <h4 className="font-bold text-white text-xs">
+                {isArabic ? 'إعدادات مجموعة واتساب دسباتش (التوصيل والمطبخ)' : 'Groupe WhatsApp Dispatch (Livreurs & Cuisine)'}
+              </h4>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Toggle Envoi automatique */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-800/60 border border-zinc-750">
+                <div className="pr-2">
+                  <span className="font-bold text-zinc-200 block text-xs">
+                    {isArabic ? 'إرسال تلقائي عند قبول الطلب' : 'Envoi automatique au groupe dès l\'acceptation'}
+                  </span>
+                  <p className="text-[10px] text-zinc-400 mt-0.5">
+                    {isArabic
+                      ? 'فتح نافذة واتساب تلقائياً عند تحويل الطلب إلى "قيد التحضير"'
+                      : 'Ouvre le lien de partage WhatsApp dès que la commande passe en préparation'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoSendWhatsAppOnAccept(!autoSendWhatsAppOnAccept)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition shrink-0 ${
+                    autoSendWhatsAppOnAccept
+                      ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/40'
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                  }`}
+                >
+                  {autoSendWhatsAppOnAccept
+                    ? (isArabic ? 'مفعّل' : 'Activé')
+                    : (isArabic ? 'معطّل' : 'Désactivé')}
+                </button>
+              </div>
+
+              {/* Lien d'invitation du groupe WhatsApp */}
+              <div className="space-y-1.5 p-3 rounded-xl bg-zinc-800/60 border border-zinc-750">
+                <label className="font-semibold text-zinc-300 flex items-center justify-between text-xs">
+                  <span>{isArabic ? 'رابط دعوة مجموعة واتساب (اختياري)' : 'Lien d\'invitation du groupe WhatsApp'}</span>
+                  {whatsAppGroupInviteUrl && whatsAppGroupInviteUrl.trim().startsWith('http') && (
+                    <a
+                      href={whatsAppGroupInviteUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 font-bold hover:underline"
+                    >
+                      <ExternalLink className="w-2.5 h-2.5" />
+                      <span>{isArabic ? 'فتح المجموعة' : 'Ouvrir le groupe'}</span>
+                    </a>
+                  )}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={whatsAppGroupInviteUrl}
+                    onChange={e => setWhatsAppGroupInviteUrl(e.target.value)}
+                    placeholder="https://chat.whatsapp.com/..."
+                    className="flex-1 bg-zinc-900 rounded-lg p-2 text-white border border-zinc-700 font-mono text-[11px]"
+                  />
+                  {whatsAppGroupInviteUrl && (
+                    <button
+                      type="button"
+                      onClick={() => window.open(whatsAppGroupInviteUrl, '_blank', 'noopener,noreferrer')}
+                      className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg font-bold text-xs flex items-center gap-1 shrink-0"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>{isArabic ? 'فتح' : 'Ouvrir'}</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-zinc-400">
+                  {isArabic
+                    ? 'يسمح للفريق بالانضمام للمجموعة بنقرة واحدة من لوحة التحكم.'
+                    : 'Permet à l\'équipe et aux livreurs d\'accéder directement au groupe depuis le back-office.'}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 

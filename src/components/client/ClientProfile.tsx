@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
+import { ThemeToggle } from '../common/ThemeToggle';
 import {
   User,
   Phone,
@@ -58,13 +59,12 @@ export const ClientProfile: React.FC = () => {
     if (!navigator.geolocation) return;
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
-      pos => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const url = `https://maps.google.com/?q=${lat},${lng}`;
+      (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
         setLatitude(lat);
         setLongitude(lng);
-        setMapUrl(url);
+        setMapUrl(`https://maps.google.com/?q=${lat},${lng}`);
         setIsLocating(false);
       },
       () => {
@@ -76,47 +76,53 @@ export const ClientProfile: React.FC = () => {
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!phone.trim()) return;
+
     registerOrLoginCustomer({
-      name,
-      phone,
-      commune,
-      address,
-      landmark,
+      name: name.trim() || currentCustomer?.name || (isArabic ? 'زبون' : 'Client'),
+      phone: phone.trim(),
+      commune: commune.trim() || 'Birkhadem',
+      address: address.trim(),
+      landmark: landmark.trim() || undefined,
       mapUrl: mapUrl.trim() || undefined,
       latitude,
       longitude,
     });
+
     setIsEditing(false);
     setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
+    setTimeout(() => setSavedSuccess(false), 3000);
   };
 
   return (
     <div className="flex-1 overflow-y-auto p-3.5 pb-24 space-y-4">
-      {/* Profile Header */}
-      <div className="bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 p-4 rounded-2xl border border-zinc-800 space-y-3 shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center text-white font-extrabold text-base shadow-md">
-            {currentCustomer?.name?.charAt(0) || 'S'}
+      {/* Customer Info Card */}
+      <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-3 shadow-sm transition-colors">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-orange-400 flex items-center justify-center font-bold text-base">
+              {currentCustomer?.name?.charAt(0).toUpperCase() || 'S'}
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
+                {currentCustomer?.name}
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                {currentCustomer?.phone}
+              </p>
+            </div>
           </div>
-          <div className="space-y-0.5 flex-1 min-w-0">
-            <h3 className="text-sm font-bold text-white truncate">
-              {currentCustomer?.name || (isArabic ? 'زبون سلطان الدجاج' : 'Client Sultan')}
-            </h3>
-            <p className="text-xs text-zinc-400 font-mono" dir="ltr">
-              {currentCustomer?.phone || '+213 771 00 00 00'}
-            </p>
-          </div>
+
           <button
             onClick={() => setIsEditing(!isEditing)}
-            className="text-[11px] font-semibold text-orange-400 hover:text-orange-300 px-2.5 py-1 rounded-lg bg-orange-500/10 border border-orange-500/20"
+            className="text-[11px] font-semibold text-amber-700 dark:text-orange-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20"
           >
             {isEditing ? (isArabic ? 'إلغاء' : 'Annuler') : (isArabic ? 'تعديل' : 'Modifier')}
           </button>
         </div>
 
         {savedSuccess && (
-          <div className="p-2 bg-emerald-950/60 border border-emerald-500/30 rounded-lg text-emerald-300 text-xs flex items-center gap-1.5">
+          <div className="p-2 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-500/30 rounded-lg text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-1.5">
             <Check className="w-3.5 h-3.5" />
             <span>{isArabic ? 'تم حفظ التعديلات بنجاح' : 'Coordonnées enregistrées avec succès'}</span>
           </div>
@@ -124,9 +130,9 @@ export const ClientProfile: React.FC = () => {
 
         {/* Address Card or Edit Form */}
         {!isEditing ? (
-          <div className="pt-2 border-t border-zinc-800/80 space-y-1.5 text-xs text-zinc-300">
+          <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800/80 space-y-1.5 text-xs text-zinc-700 dark:text-zinc-300">
             <div className="flex items-start gap-2">
-              <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
+              <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400 shrink-0 mt-0.5" />
               <span>
                 {currentCustomer?.address || 'Birkhadem'}, {currentCustomer?.commune || 'Birkhadem'}
                 {currentCustomer?.landmark ? ` (${currentCustomer.landmark})` : ''}
@@ -134,75 +140,75 @@ export const ClientProfile: React.FC = () => {
             </div>
             {currentCustomer?.mapUrl && (
               <div className="flex items-center gap-2 pt-0.5">
-                <Navigation className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <Navigation className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
                 <a
                   href={currentCustomer.mapUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-400 hover:underline flex items-center gap-1 text-[11px]"
+                  className="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 text-[11px] font-semibold"
                 >
                   <span>{isArabic ? 'موقع GPS مسجل (Google Maps)' : 'Position GPS enregistrée (Google Maps)'}</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
             )}
-            <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
-              <span>{t.ordersCount}: <strong className="text-zinc-200">{currentCustomer?.orderCount || 0}</strong></span>
-              <span>{t.totalSpent}: <strong className="text-amber-400">{currentCustomer?.totalSpent?.toLocaleString() || 0} {t.currency}</strong></span>
+            <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1">
+              <span>{t.ordersCount}: <strong className="text-zinc-900 dark:text-zinc-200">{currentCustomer?.orderCount || 0}</strong></span>
+              <span>{t.totalSpent}: <strong className="text-amber-700 dark:text-amber-400">{currentCustomer?.totalSpent?.toLocaleString() || 0} {t.currency}</strong></span>
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-800 space-y-2.5 text-xs">
+          <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-200 dark:border-zinc-800 space-y-2.5 text-xs">
             <div>
-              <label className="text-[10px] text-zinc-400">{t.fullName}</label>
+              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.fullName}</label>
               <input
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700"
+                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
               />
             </div>
             <div>
-              <label className="text-[10px] text-zinc-400">{t.phoneNumber}</label>
+              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.phoneNumber}</label>
               <input
                 type="text"
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
-                className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700 font-mono"
+                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 font-mono focus:outline-none focus:border-amber-500"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-zinc-400">{t.commune}</label>
+                <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.commune}</label>
                 <input
                   type="text"
                   value={commune}
                   onChange={e => setCommune(e.target.value)}
-                  className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700"
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400">{t.landmark}</label>
+                <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.landmark}</label>
                 <input
                   type="text"
                   value={landmark}
                   onChange={e => setLandmark(e.target.value)}
-                  className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700"
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
                 />
               </div>
             </div>
             <div>
-              <label className="text-[10px] text-zinc-400">{t.address}</label>
+              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.address}</label>
               <input
                 type="text"
                 value={address}
                 onChange={e => setAddress(e.target.value)}
-                className="w-full bg-zinc-800 rounded-lg p-2 text-white border border-zinc-700"
+                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
               />
             </div>
-            <div className="space-y-1 pt-1 border-t border-zinc-800/80">
-              <label className="text-[10px] text-zinc-400 flex items-center gap-1">
-                <Navigation className="w-3 h-3 text-orange-400" />
+            <div className="space-y-1 pt-1 border-t border-zinc-200 dark:border-zinc-800/80">
+              <label className="text-[10px] text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
+                <Navigation className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400" />
                 <span>{t.gpsLocationLabel}</span>
               </label>
               <div className="flex items-center gap-2">
@@ -210,7 +216,7 @@ export const ClientProfile: React.FC = () => {
                   type="button"
                   onClick={handleGetGeolocation}
                   disabled={isLocating}
-                  className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-orange-400 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-zinc-700 shrink-0"
+                  className="px-2.5 py-1.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-amber-700 dark:text-orange-400 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-zinc-300 dark:border-zinc-700 shrink-0"
                 >
                   {isLocating ? (
                     <>
@@ -229,13 +235,13 @@ export const ClientProfile: React.FC = () => {
                   value={mapUrl}
                   onChange={e => setMapUrl(e.target.value)}
                   placeholder="Lien Google Maps..."
-                  className="w-full bg-zinc-800 rounded-lg p-1.5 text-xs text-white border border-zinc-700 font-mono"
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-1.5 text-xs text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 font-mono focus:outline-none focus:border-amber-500"
                 />
               </div>
             </div>
             <button
               type="submit"
-              className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-bold shadow-md transition"
+              className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-lg font-bold shadow-md transition"
             >
               {language === 'ar' ? 'حفظ التعديلات' : 'Enregistrer'}
             </button>
@@ -243,18 +249,23 @@ export const ClientProfile: React.FC = () => {
         )}
       </div>
 
+      {/* Theme Preference Settings Card */}
+      <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-2 shadow-sm transition-colors">
+        <ThemeToggle variant="full" />
+      </div>
+
       {/* PWA In-App Install Prompt Card */}
-      <div className="bg-zinc-900/90 rounded-2xl p-3.5 border border-zinc-800 space-y-2">
+      <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-3.5 border border-zinc-250 dark:border-zinc-800 space-y-2 shadow-sm transition-colors">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-orange-500/20 text-orange-400 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-orange-400 flex items-center justify-center">
               <Download className="w-4 h-4" />
             </div>
             <div>
-              <h4 className="text-xs font-bold text-white">
+              <h4 className="text-xs font-bold text-zinc-900 dark:text-white">
                 {isArabic ? 'تطبيق الهاتف المحمول (PWA)' : 'Application Mobile (PWA)'}
               </h4>
-              <p className="text-[10px] text-zinc-400">
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                 {isArabic ? 'قابل للتثبيت مباشرة على شاشتك الرئيسية' : 'Installable directement sur votre écran d\'accueil'}
               </p>
             </div>
@@ -262,7 +273,7 @@ export const ClientProfile: React.FC = () => {
         </div>
 
         {isInstalled ? (
-          <div className="text-[11px] text-emerald-400 bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/20 flex items-center gap-1.5">
+          <div className="text-[11px] text-emerald-800 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 p-2 rounded-lg border border-emerald-300 dark:border-emerald-500/20 flex items-center gap-1.5 font-medium">
             <Check className="w-3.5 h-3.5" />
             <span>{t.installedPwa}</span>
           </div>
@@ -276,7 +287,7 @@ export const ClientProfile: React.FC = () => {
         ) : isIOS ? (
           <button
             onClick={() => setShowIOSModal(true)}
-            className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold rounded-xl border border-zinc-700 transition"
+            className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold rounded-xl border border-zinc-300 dark:border-zinc-700 transition"
           >
             {isArabic ? 'تثبيت على iPhone / iPad (iOS)' : 'Installer sur iPhone / iPad (iOS)'}
           </button>
@@ -289,12 +300,12 @@ export const ClientProfile: React.FC = () => {
 
       {/* Orders History & Reorder */}
       <div className="space-y-2.5">
-        <h4 className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+        <h4 className="text-xs font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
           {t.orderHistory} ({customerOrders.length})
         </h4>
 
         {customerOrders.length === 0 ? (
-          <div className="bg-zinc-900/60 p-4 rounded-xl border border-zinc-800 text-center text-xs text-zinc-500">
+          <div className="bg-white dark:bg-zinc-900/60 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 text-center text-xs text-zinc-500 shadow-sm">
             {t.noPastOrders}
           </div>
         ) : (
@@ -302,17 +313,17 @@ export const ClientProfile: React.FC = () => {
             {customerOrders.map(order => (
               <div
                 key={order.id}
-                className="bg-zinc-900/90 p-3 rounded-xl border border-zinc-800 space-y-2 text-xs"
+                className="bg-white dark:bg-zinc-900/90 p-3 rounded-xl border border-zinc-250 dark:border-zinc-800 space-y-2 text-xs shadow-sm transition-colors"
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-amber-400">{order.orderNumber}</span>
+                  <span className="font-bold text-amber-700 dark:text-amber-400">{order.orderNumber}</span>
                   <span
                     className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                       order.status === 'delivered'
-                        ? 'bg-emerald-950 text-emerald-400'
+                        ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400'
                         : order.status === 'cancelled'
-                        ? 'bg-red-950 text-red-400'
-                        : 'bg-orange-950 text-orange-400 animate-pulse'
+                        ? 'bg-red-50 dark:bg-red-950 text-red-800 dark:text-red-400'
+                        : 'bg-orange-50 dark:bg-orange-950 text-orange-800 dark:text-orange-400 animate-pulse'
                     }`}
                   >
                     {order.status === 'delivered'
@@ -323,12 +334,12 @@ export const ClientProfile: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="text-[11px] text-zinc-300">
+                <div className="text-[11px] text-zinc-700 dark:text-zinc-300">
                   {order.items.map(it => `${it.quantity}x ${isArabic ? it.nameAr : it.nameFr}`).join(', ')}
                 </div>
 
-                <div className="flex items-center justify-between pt-1 border-t border-zinc-800/80">
-                  <span className="font-extrabold text-white">
+                <div className="flex items-center justify-between pt-1 border-t border-zinc-200 dark:border-zinc-800/80">
+                  <span className="font-extrabold text-zinc-900 dark:text-white">
                     {order.total.toLocaleString()} {t.currency}
                   </span>
 
@@ -338,13 +349,13 @@ export const ClientProfile: React.FC = () => {
                         setClientActiveOrder(order);
                         setClientTab('tracking');
                       }}
-                      className="px-2 py-1 rounded bg-zinc-800 text-zinc-300 text-[10px] hover:bg-zinc-700"
+                      className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-[10px] border border-zinc-250 dark:border-transparent transition"
                     >
                       {t.viewTracking}
                     </button>
                     <button
                       onClick={() => reorderPastOrder(order)}
-                      className="px-2.5 py-1 rounded bg-orange-600/90 hover:bg-orange-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm"
+                      className="px-2.5 py-1 rounded bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm transition active:scale-95"
                     >
                       <RotateCcw className="w-3 h-3" />
                       <span>{t.reorder}</span>
@@ -358,24 +369,24 @@ export const ClientProfile: React.FC = () => {
       </div>
 
       {/* Language Switch */}
-      <div className="bg-zinc-900/90 rounded-2xl p-3 border border-zinc-800 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-xs text-zinc-300">
-          <Globe className="w-4 h-4 text-orange-400" />
+      <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-3 border border-zinc-250 dark:border-zinc-800 flex items-center justify-between shadow-sm transition-colors">
+        <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300 font-medium">
+          <Globe className="w-4 h-4 text-amber-600 dark:text-orange-400" />
           <span>{isArabic ? 'لغة التطبيق' : 'Langue de l\'application'}</span>
         </div>
-        <div className="flex items-center gap-1 bg-zinc-800 p-0.5 rounded-lg border border-zinc-700">
+        <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg border border-zinc-300 dark:border-zinc-700">
           <button
             onClick={() => setLanguage('fr')}
-            className={`px-2 py-1 rounded text-xs font-bold transition ${
-              language === 'fr' ? 'bg-orange-600 text-white' : 'text-zinc-400'
+            className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+              language === 'fr' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm' : 'text-zinc-600 dark:text-zinc-400'
             }`}
           >
             Français
           </button>
           <button
             onClick={() => setLanguage('ar')}
-            className={`px-2 py-1 rounded text-xs font-bold transition ${
-              language === 'ar' ? 'bg-orange-600 text-white' : 'text-zinc-400'
+            className={`px-2.5 py-1 rounded text-xs font-bold transition ${
+              language === 'ar' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm' : 'text-zinc-600 dark:text-zinc-400'
             }`}
           >
             عربي
@@ -384,17 +395,17 @@ export const ClientProfile: React.FC = () => {
       </div>
 
       {/* Restaurant Contact Details */}
-      <div className="bg-zinc-900/60 rounded-2xl p-3.5 border border-zinc-800 space-y-1.5 text-xs text-zinc-400">
-        <h5 className="font-bold text-zinc-200">{isArabic ? 'سلطان الدجاج (Sultan Ed-Djaj)' : 'Sultan Ed-Djaj (سلطان الدجاج)'}</h5>
-        <p>{isArabic ? 'حي البساتين، بئر خادم، الجزائر العاصمة' : 'Les Vergers, Birkhadem, Alger'}</p>
-        <p>{isArabic ? 'مفتوح يومياً من 13:00 إلى 00:00' : 'Ouvert tous les jours de 13h00 à 00h00'}</p>
-        <p className="text-orange-400 font-mono" dir="ltr">{settings.phone}</p>
+      <div className="bg-white dark:bg-zinc-900/60 rounded-2xl p-3.5 border border-zinc-250 dark:border-zinc-800 space-y-1.5 text-xs text-zinc-600 dark:text-zinc-400 shadow-sm transition-colors">
+        <h5 className="font-bold text-zinc-900 dark:text-zinc-200">{isArabic ? 'سلطان الدجاج (Sultan Ed-Djaj)' : 'Sultan Ed-Djaj (سلطان الدجاج)'}</h5>
+        <p>{isArabic ? 'حي البساتين، بئر خادم — نقطة استدلال: مقابل تقنيكوم ثانوية زحوال' : 'Les Vergers, Birkhadem — Point de repère : En face Technicum Lycée Zahoual'}</p>
+        <p>{isArabic ? 'مفتوح 24 سا / 24 سا (7 أيام / 7)' : 'Ouvert 24h / 24h (7j/7)'}</p>
+        <p className="text-amber-700 dark:text-orange-400 font-mono font-semibold" dir="ltr">{settings.phone}</p>
       </div>
 
       {/* Logout button */}
       <button
         onClick={logoutCustomer}
-        className="w-full py-2.5 rounded-xl border border-zinc-800 hover:border-red-500/40 text-zinc-400 hover:text-red-400 text-xs font-semibold flex items-center justify-center gap-2 transition"
+        className="w-full py-2.5 rounded-xl border border-zinc-300 dark:border-zinc-800 hover:border-red-500/40 text-zinc-600 dark:text-zinc-400 hover:text-red-600 dark:hover:text-red-400 text-xs font-semibold flex items-center justify-center gap-2 transition"
       >
         <LogOut className="w-3.5 h-3.5" />
         <span>{t.logout}</span>
@@ -402,27 +413,27 @@ export const ClientProfile: React.FC = () => {
 
       {/* iOS Safari Installation Guide Modal */}
       {showIOSModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-xs bg-zinc-900 border border-zinc-700 rounded-2xl p-5 shadow-2xl space-y-3 text-start">
-            <h4 className="text-sm font-bold text-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/70 p-4">
+          <div className="w-full max-w-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-2xl p-5 shadow-2xl space-y-3 text-start">
+            <h4 className="text-sm font-bold text-zinc-900 dark:text-white">
               {isArabic ? 'التثبيت على iPhone / iPad' : 'Installer sur iPhone / iPad'}
             </h4>
-            <p className="text-xs text-zinc-300 leading-relaxed">
+            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
               {isArabic ? (
                 <>
-                  1. اضغط على زر <strong>مشاركة (Partager)</strong> <span className="text-blue-400">⎋</span> في شريط Safari.<br />
+                  1. اضغط على زر <strong>مشاركة (Partager)</strong> <span className="text-blue-500">⎋</span> في شريط Safari.<br />
                   2. انزل للأسفل واضغط على <strong>إضافة إلى الشاشة الرئيسية (Sur l'écran d'accueil)</strong>.
                 </>
               ) : (
                 <>
-                  1. Appuyez sur le bouton <strong>Partager</strong> <span className="text-blue-400">⎋</span> dans la barre d'outils Safari.<br />
+                  1. Appuyez sur le bouton <strong>Partager</strong> <span className="text-blue-500">⎋</span> dans la barre d'outils Safari.<br />
                   2. Faites défiler vers le bas et appuyez sur <strong>Sur l'écran d'accueil</strong>.
                 </>
               )}
             </p>
             <button
               onClick={() => setShowIOSModal(false)}
-              className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-xl"
+              className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold rounded-xl transition"
             >
               {isArabic ? 'إغلاق' : 'Fermer'}
             </button>

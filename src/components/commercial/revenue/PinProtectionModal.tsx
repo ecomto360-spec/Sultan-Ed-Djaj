@@ -23,16 +23,17 @@ export const PinProtectionModal: React.FC<PinProtectionModalProps> = ({ onSucces
 
     if (nextPin.length === 4) {
       // Auto submit
-      const ok = unlockRevenue(nextPin);
-      if (ok) {
-        onSuccess?.();
-      } else {
-        setHasError(true);
-        setTimeout(() => {
-          setPin('');
-          setHasError(false);
-        }, 800);
-      }
+      unlockRevenue(nextPin).then(ok => {
+        if (ok) {
+          onSuccess?.();
+        } else {
+          setHasError(true);
+          setTimeout(() => {
+            setPin('');
+            setHasError(false);
+          }, 800);
+        }
+      });
     }
   };
 
