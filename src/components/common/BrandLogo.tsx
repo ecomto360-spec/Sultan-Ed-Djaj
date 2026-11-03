@@ -20,7 +20,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       {/* Insignia SVG */}
       <div
         style={{ width: iconSize, height: iconSize }}
-        className="relative shrink-0 rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-950 p-1 border border-zinc-700/60 shadow-lg shadow-orange-950/30 flex items-center justify-center overflow-hidden"
+        className="relative shrink-0 rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-950 p-1 border border-zinc-700/60 shadow-md shadow-orange-950/20 flex items-center justify-center overflow-hidden"
       >
         <svg viewBox="0 0 100 100" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
           <defs>
@@ -53,15 +53,15 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       {/* Typography */}
       <div className="flex flex-col text-start">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="font-extrabold tracking-tight text-white leading-tight font-serif" style={{ fontSize: size === 'sm' ? '1rem' : size === 'md' ? '1.2rem' : '1.5rem' }}>
+          <span className="font-extrabold tracking-tight text-zinc-900 dark:text-white leading-tight font-serif" style={{ fontSize: size === 'sm' ? '1rem' : size === 'md' ? '1.2rem' : '1.5rem' }}>
             {isArabic ? 'سلطان الدجاج' : 'Sultan Ed-Djaj'}
           </span>
-          <span className="text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-bold border border-orange-500/30">
+          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-orange-400 font-bold border border-amber-500/30">
             {isArabic ? 'سلطان' : 'سلطان الدجاج'}
           </span>
         </div>
         {showSubtitle && (
-          <span className="text-[11px] text-zinc-400 font-medium tracking-wide">
+          <span className="text-[11px] text-zinc-600 dark:text-zinc-400 font-medium tracking-wide">
             {isArabic ? 'دجاج محمر ومشوي على الجمر – بئر خادم' : 'Poulet Braisé & Rôti • Birkhadem'}
           </span>
         )}

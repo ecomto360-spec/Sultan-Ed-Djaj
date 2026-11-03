@@ -19,24 +19,24 @@ export const KitchenReceiptPrintModal: React.FC<KitchenReceiptPrintModalProps> =
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl space-y-4">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh]">
         {/* Modal Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Printer className="w-5 h-5 text-orange-400" />
             <h3 className="text-sm font-bold text-white">Ticket Cuisine & Caisse (80mm)</h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* 80mm Thermal Receipt Preview Canvas */}
-        <div className="px-6 py-2 flex justify-center">
+        <div className="px-3 sm:px-6 py-3 flex justify-center overflow-y-auto flex-1 bg-zinc-950/40">
           <div
             ref={printRef}
             id="thermal-receipt"
@@ -82,8 +82,13 @@ export const KitchenReceiptPrintModal: React.FC<KitchenReceiptPrintModalProps> =
               <div>Tél : {order.customerPhone}</div>
               {order.deliveryAddress && (
                 <div>
-                  Adresse : {order.deliveryAddress.address}, {order.deliveryAddress.commune}
-                  {order.deliveryAddress.landmark ? ` (${order.deliveryAddress.landmark})` : ''}
+                  <div>Adresse : {order.deliveryAddress.address}, {order.deliveryAddress.commune}</div>
+                  {order.deliveryAddress.landmark && <div>Repère : {order.deliveryAddress.landmark}</div>}
+                  {order.deliveryAddress.mapUrl && (
+                    <div className="text-[10px] break-all pt-0.5">
+                      📍 GPS : {order.deliveryAddress.mapUrl}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

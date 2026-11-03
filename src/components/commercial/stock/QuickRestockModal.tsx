@@ -31,16 +31,16 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fadeIn overflow-y-auto">
+      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20">
               <PlusCircle className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">{t.stockQuickRestock}</h3>
+              <h3 className="text-sm font-bold text-white">{t.quickRestockBtn}</h3>
               <p className="text-[11px] text-zinc-400">
                 {isArabic ? 'إضافة كمية واردة فورية إلى المخزون' : 'Entrée de stock manuelle'}
               </p>
@@ -55,10 +55,10 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-3.5 sm:p-4 space-y-4 overflow-y-auto flex-1">
           {/* Article selection */}
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-zinc-300">{t.stockItemName}</label>
+            <label className="text-xs font-semibold text-zinc-300">{t.colStockItem}</label>
             <select
               value={selectedItemId}
               onChange={e => setSelectedItemId(e.target.value)}
@@ -66,7 +66,7 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
             >
               {stockItems.map(item => (
                 <option key={item.id} value={item.id}>
-                  {isArabic ? item.nameAr : item.nameFr} ({t.stockCurrent} {item.currentStock} {item.unit})
+                  {isArabic ? item.nameAr : item.nameFr} ({t.colCurrentStock}: {item.currentStock} {item.unit})
                 </option>
               ))}
             </select>
@@ -80,12 +80,12 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
             <div className="flex items-center gap-2">
               <input
                 type="number"
-                step="0.1"
+                step="any"
                 min="0.01"
                 required
                 value={quantity}
                 onChange={e => setQuantity(parseFloat(e.target.value) || 0)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-orange-500 text-center"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm font-bold text-white focus:outline-none focus:border-orange-500 text-center font-mono"
               />
               <span className="text-xs font-semibold text-zinc-400 w-16 shrink-0">
                 {targetItem ? targetItem.unit : ''}
@@ -94,13 +94,16 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
           </div>
 
           {/* Preset Buttons */}
-          <div className="flex gap-2">
-            {[5, 10, 20, 50].map(val => (
+          <div className="flex flex-wrap gap-1.5">
+            {(targetItem?.id === 'stock-1' || targetItem?.unit === 'piece'
+              ? [10, 20, 50, 100, 120, 150]
+              : [5, 10, 20, 50]
+            ).map(val => (
               <button
                 key={val}
                 type="button"
                 onClick={() => setQuantity(val)}
-                className="flex-1 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold transition"
+                className="flex-1 min-w-[50px] py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold font-mono transition"
               >
                 +{val}
               </button>
@@ -145,7 +148,7 @@ export const QuickRestockModal: React.FC<QuickRestockModalProps> = ({ stockItem,
               type="submit"
               className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-950/40"
             >
-              {t.stockQuickRestock}
+              {t.quickRestockBtn}
             </button>
           </div>
         </form>

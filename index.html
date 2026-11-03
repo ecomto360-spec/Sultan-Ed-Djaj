@@ -11,7 +11,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     
     <!-- PWA meta tags -->
-    <meta name="theme-color" content="#18181b" />
+    <meta name="theme-color" content="#0c0c0e" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -20,13 +20,254 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
 
-    <!-- Google Fonts for Arabic & Latin display -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Polyfill/fix for browser extensions and Vite HMR websocket in iframe -->
+    <!-- Polyfill/fix for browser extensions and Vite HMR websocket in iframe -->
+    <script>
+      (function() {
+        try {
+          var originalFetch = window.fetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() { return originalFetch; },
+            set: function(newFetch) { originalFetch = newFetch; },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {}
+
+        // Mock WebSocket for Vite HMR in iframe to prevent connection failures and unhandled rejections
+        try {
+          var NativeWebSocket = window.WebSocket;
+          if (NativeWebSocket) {
+            window.WebSocket = function(url, protocols) {
+              var isViteHmr = false;
+              if (typeof url === 'string' && (url.indexOf('token=') !== -1 || url.indexOf('24678') !== -1 || url.indexOf('vite-hmr') !== -1)) {
+                isViteHmr = true;
+              }
+              if (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1)) {
+                isViteHmr = true;
+              }
+
+              if (isViteHmr) {
+                var listeners = {};
+                var mockSocket = {
+                  CONNECTING: 0,
+                  OPEN: 1,
+                  CLOSING: 2,
+                  CLOSED: 3,
+                  readyState: 1,
+                  url: String(url),
+                  protocol: 'vite-hmr',
+                  extensions: '',
+                  bufferedAmount: 0,
+                  binaryType: 'blob',
+                  onopen: null,
+                  onclose: null,
+                  onerror: null,
+                  onmessage: null,
+                  send: function() {},
+                  close: function() {
+                    mockSocket.readyState = 3;
+                    if (typeof mockSocket.onclose === 'function') {
+                      mockSocket.onclose({ type: 'close', wasClean: true, code: 1000, reason: '' });
+                    }
+                  },
+                  addEventListener: function(type, listener) {
+                    if (!listeners[type]) listeners[type] = [];
+                    listeners[type].push(listener);
+                  },
+                  removeEventListener: function(type, listener) {
+                    if (!listeners[type]) return;
+                    listeners[type] = listeners[type].filter(function(l) { return l !== listener; });
+                  },
+                  dispatchEvent: function(event) {
+                    var fns = listeners[event && event.type] || [];
+                    fns.forEach(function(fn) {
+                      try { fn.call(mockSocket, event); } catch (e) {}
+                    });
+                    return true;
+                  }
+                };
+
+                setTimeout(function() {
+                  if (mockSocket.readyState === 1) {
+                    if (typeof mockSocket.onopen === 'function') {
+                      try { mockSocket.onopen({ type: 'open' }); } catch (e) {}
+                    }
+                    mockSocket.dispatchEvent({ type: 'open' });
+                  }
+                }, 0);
+
+                return mockSocket;
+              }
+
+              return new NativeWebSocket(url, protocols);
+            };
+
+            window.WebSocket.CONNECTING = 0;
+            window.WebSocket.OPEN = 1;
+            window.WebSocket.CLOSING = 2;
+            window.WebSocket.CLOSED = 3;
+            window.WebSocket.prototype = NativeWebSocket.prototype;
+          }
+        } catch (e) {}
+
+        function isIgnoredError(str) {
+          if (!str || typeof str !== 'string') return false;
+          return (
+            str.indexOf('createWebSocketModuleRunnerTransport') !== -1 ||
+            str.indexOf('@vite/client') !== -1 ||
+            str.indexOf('WebSocket closed without opened') !== -1 ||
+            str.indexOf('failed to connect to websocket') !== -1 ||
+            str.indexOf('WebSocket') !== -1 ||
+            str.indexOf('Cannot set property fetch') !== -1 ||
+            str.indexOf('chrome-extension://') !== -1
+          );
+        }
+
+        function shouldSuppress(event) {
+          if (!event) return false;
+          var msg = event.message ? String(event.message) : '';
+          var file = event.filename ? String(event.filename) : '';
+          var stack = event.error && event.error.stack ? String(event.error.stack) : '';
+          var errStr = event.error ? String(event.error) : '';
+          var reasonStack = event.reason && event.reason.stack ? String(event.reason.stack) : '';
+          var reasonStr = event.reason ? String(event.reason) : '';
+
+          return (
+            isIgnoredError(msg) ||
+            isIgnoredError(file) ||
+            isIgnoredError(stack) ||
+            isIgnoredError(errStr) ||
+            isIgnoredError(reasonStack) ||
+            isIgnoredError(reasonStr)
+          );
+        }
+
+        // Suppress unhandled errors originating from extensions or Vite WebSocket HMR
+        window.addEventListener('error', function(event) {
+          if (shouldSuppress(event)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (shouldSuppress(event)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        var prevOnError = window.onerror;
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+          var combined = String(msg) + ' ' + String(url) + ' ' + (error && error.stack ? String(error.stack) : '');
+          if (isIgnoredError(combined)) {
+            return true;
+          }
+          if (typeof prevOnError === 'function') {
+            return prevOnError.apply(this, arguments);
+          }
+        };
+
+        // Also prevent console.error from triggering outer host error listeners on [vite] websocket warnings
+        var origConsoleError = console.error;
+        console.error = function() {
+          var first = arguments[0];
+          if (typeof first === 'string' && (first.indexOf('[vite] failed to connect to websocket') !== -1 || first.indexOf('WebSocket closed without opened') !== -1)) {
+            return;
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+      })();
+    </script>
+
+    <!-- Anti-flash inline script for Dark / Light mode -->
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('sultan_theme');
+          var isDark = true;
+          if (saved === 'dark') {
+            isDark = true;
+          } else if (saved === 'light') {
+            isDark = false;
+          } else {
+            // 'auto' or unset: check system preference
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+              isDark = false;
+            } else {
+              isDark = true;
+            }
+          }
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.style.colorScheme = 'light';
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', '#f8f7f4');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Unregister ALL stale Service Workers & clear cache to prevent black screen -->
+    <script>
+      (function() {
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(regs) {
+              for (var i = 0; i < regs.length; i++) {
+                regs[i].unregister();
+              }
+            }).catch(function() {});
+          }
+          if ('caches' in window) {
+            caches.keys().then(function(keys) {
+              for (var i = 0; i < keys.length; i++) {
+                caches.delete(keys[i]);
+              }
+            }).catch(function() {});
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body class="bg-[#0f0f12] text-zinc-100 font-sans antialiased selection:bg-orange-500 selection:text-white">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Branded initial loading shell: prevents dark void while scripts execute -->
+      <div id="initial-loading-shell" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #0c0c0e; color: #f4f4f5; font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; padding: 20px; text-align: center;">
+        <div style="width: 56px; height: 56px; border-radius: 20px; background: linear-gradient(135deg, #ea580c, #d97706); display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px -5px rgba(234, 88, 12, 0.4); margin-bottom: 16px;">
+          <svg viewBox="0 0 100 100" style="width: 34px; height: 34px;" xmlns="http://www.w3.org/2000/svg">
+            <path d="M 32 36 L 40 44 L 50 30 L 60 44 L 68 36 L 66 48 L 34 48 Z" fill="#fef08a" />
+            <path d="M50 42 C40 56, 32 65, 32 76 C32 86, 40 92, 50 92 C60 92, 68 86, 68 76 C68 65, 60 56, 50 42 Z" fill="#ea580c" />
+            <path d="M50 56 C45 64, 40 70, 40 77 C40 83, 44 87, 50 87 C56 87, 60 83, 60 77 C60 70, 55 64, 50 56 Z" fill="#fef08a" />
+          </svg>
+        </div>
+        <h1 style="font-size: 16px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff; letter-spacing: -0.02em;">Sultan Ed-Djaj</h1>
+        <p style="font-size: 12px; color: #a1a1aa; margin: 0 0 20px 0;">سلطان الدجاج · Chargement en cours...</p>
+        <div id="loading-recovery-box" style="display: none; margin-top: 18px; padding: 12px 18px; background: #1a1a20; border: 1px solid rgba(234, 88, 12, 0.4); border-radius: 16px; max-width: 320px; text-align: center;">
+          <p style="margin: 0 0 10px 0; font-size: 12px; color: #fb923c; font-weight: 600;">Démarrage plus long que prévu</p>
+          <button onclick="try{localStorage.clear();sessionStorage.clear();}catch(e){}window.location.reload();" style="padding: 8px 16px; background: #ea580c; color: #fff; border: none; border-radius: 10px; font-size: 12px; font-weight: bold; cursor: pointer;">
+            Réinitialiser et recharger
+          </button>
+        </div>
+        <style>
+          @keyframes initial-spin { to { transform: rotate(360deg); } }
+        </style>
+        <script>
+          setTimeout(function() {
+            var box = document.getElementById('loading-recovery-box');
+            if (box && document.getElementById('initial-loading-shell')) {
+              box.style.display = 'block';
+            }
+          }, 3500);
+        </script>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

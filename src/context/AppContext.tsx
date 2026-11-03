@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback, ReactNode } from 'react';
 import {
   Product,
   Customer,
@@ -18,6 +18,12 @@ import {
   CashClosing,
   InventoryDiscrepancy,
   SupplierPurchaseGroup,
+  Day,
+  QuotaAdjustment,
+  PaymentMethod,
+  OrderSource,
+  ProductCategoryItem,
+  ClientPageContent,
 } from '../types';
 import {
   INITIAL_PRODUCTS,
@@ -26,10 +32,26 @@ import {
   INITIAL_SETTINGS,
   INITIAL_STOCK_ITEMS,
   INITIAL_COMPOSITIONS,
+  INITIAL_CATEGORIES,
+  INITIAL_CLIENT_PAGE_CONTENT,
   generateHistoricalData,
 } from '../data/seedData';
 import { soundService } from '../services/sound';
 import { getActiveStockAlerts, getAvailablePortions } from '../services/stockService';
+import {
+  getAlgiersDateString,
+  computeDayStats,
+  migrateOrdersAndDays,
+} from '../services/dayService';
+import {
+  calculateSalesMetrics,
+  isOrderInDay,
+  computeDaySnapshot,
+  calculateTheoreticalCash,
+  migrateOrderDefaults,
+} from '../services/salesService';
+import { authFetch, getAdminToken, getStoredAdminRole, notifyAuthLogout, verifyManagerPinServer } from '../services/authService';
+import { sendToWhatsApp } from '../services/whatsappService';
 
 interface AppContextType {
   view: 'client' | 'commercial';
@@ -38,11 +60,24 @@ interface AppContextType {
   setLanguage: (lang: Language) => void;
   userRole: UserRole;
   setUserRole: (role: UserRole) => void;
+  authenticatedRole: UserRole;
+  setAuthenticatedRole: (role: UserRole) => void;
 
   // Data
   products: Product[];
   customers: Customer[];
   orders: Order[];
+  days: Day[];
+  currentDay: Day | null;
+  unclosedPastDay: Day | null;
+  lastClosedDayQuota: number;
+  openDay: (quotaInitial: number) => Day;
+  closeDay: (options?: {
+    dayId?: string;
+    activeOrdersResolution?: 'delivered' | 'cancelled' | 'keep';
+    countedCash?: number;
+    cashClosingNote?: string;
+  }) => void;
   settings: StoreSettings;
   isStoreActuallyOpen: boolean;
 
@@ -79,7 +114,7 @@ interface AppContextType {
 
   // Manager PIN Security for Recettes
   isRevenueUnlocked: boolean;
-  unlockRevenue: (pin: string) => boolean;
+  unlockRevenue: (pin: string) => Promise<boolean>;
   lockRevenue: () => void;
 
   // Client Session & Cart
@@ -94,10 +129,12 @@ interface AppContextType {
   cartItemsCount: number;
 
   // Active Order & Navigation
-  clientTab: 'menu' | 'cart' | 'tracking' | 'profile';
-  setClientTab: (tab: 'menu' | 'cart' | 'tracking' | 'profile') => void;
+  clientTab: 'menu' | 'cart' | 'tracking' | 'profile' | 'store_locator';
+  setClientTab: (tab: 'menu' | 'cart' | 'tracking' | 'profile' | 'store_locator') => void;
   clientActiveOrder: Order | null;
   setClientActiveOrder: (ord: Order | null) => void;
+  clientSimulatorMode: 'frame' | 'fluid';
+  setClientSimulatorMode: (mode: 'frame' | 'fluid') => void;
 
   // Commercial state & Navigation
   backOfficeTab: BackOfficeTab;
@@ -106,10 +143,23 @@ interface AppContextType {
   setBackOfficeOrdersView: (v: 'kanban' | 'table') => void;
   unreadAlertCount: number;
   clearNewOrderAlert: (orderId: string) => void;
+  isMobileSidebarOpen: boolean;
+  setIsMobileSidebarOpen: (open: boolean) => void;
+  toggleMobileSidebar: () => void;
 
   // Cancellation modal prompt state
   cancelModalOrder: Order | null;
   setCancelModalOrder: (order: Order | null) => void;
+
+  // Daily Chicken Quota & Live Countdown
+  dailyChickenQuota: number;
+  dailyChickenInitial: number;
+  dailyChickenRemaining: number;
+  dailyChickenSold: number;
+  setDailyChickenQuota: (quota: number) => void;
+  setTodayChickenCount: (count: number, mode: 'set_initial' | 'set_remaining' | 'add') => void;
+  resetTodayChickenBatch: (newTotal?: number) => void;
+  refreshSync: () => Promise<void>;
 
   // Actions
   placeOrder: (params: {
@@ -119,6 +169,9 @@ interface AppContextType {
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
@@ -127,30 +180,74 @@ interface AppContextType {
     customerName: string;
     customerPhone: string;
     type: OrderType;
+    status?: OrderStatus;
+    source?: OrderSource;
+    paymentMethod?: PaymentMethod;
+    driverName?: string;
+    driverFee?: number;
     items: OrderItem[];
+    deliveryFee?: number;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
+    sentToWhatsApp?: boolean;
+    sentAt?: string;
   }) => Order;
-  advanceOrderStatus: (orderId: string, nextStatus: OrderStatus, note?: string) => void;
-  updateOrderStatus: (orderId: string, nextStatus: OrderStatus, note?: string) => void;
+  advanceOrderStatus: (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => void;
+  updateOrderStatus: (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => void;
   cancelOrder: (orderId: string, reason: string) => void;
   cancelOrderWithStockChoice: (
     orderId: string,
     reason: string,
     stockAction: 'return' | 'loss' | 'none'
   ) => void;
+  markOrderSentToWhatsApp: (orderId: string) => void;
 
   // Catalog actions
   addProduct: (product: Omit<Product, 'id'>) => void;
   updateProduct: (id: string, updates: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
+  duplicateProduct: (id: string) => void;
   toggleProductAvailability: (id: string) => void;
+  reorderProducts: (categoryId: string, orderedProductIds: string[]) => void;
+
+  // Categories actions
+  categories: ProductCategoryItem[];
+  addCategory: (cat: Omit<ProductCategoryItem, 'id' | 'order'>) => void;
+  updateCategory: (id: string, updates: Partial<ProductCategoryItem>) => void;
+  deleteCategory: (id: string, moveProductsToCategoryId?: string) => void;
+  reorderCategories: (orderedIds: string[]) => void;
+
+  // Client Page Content actions
+  clientPageContent: ClientPageContent;
+  updateClientPageContent: (updates: Partial<ClientPageContent>) => void;
+  publishClientPageContent: (content: ClientPageContent) => Promise<boolean>;
+
+  // Backup & Restore
+  exportCatalogJson: () => string;
+  importCatalogJson: (jsonString: string) => { success: boolean; message: string; count?: number };
 
   // Settings & Storage actions
   updateSettings: (updates: Partial<StoreSettings>) => void;
@@ -163,6 +260,9 @@ interface AppContextType {
     commune: string;
     address: string;
     landmark?: string;
+    mapUrl?: string;
+    latitude?: number;
+    longitude?: number;
   }) => Customer;
   logoutCustomer: () => void;
 }
@@ -187,6 +287,11 @@ const STORAGE_KEYS = {
   STOCK_MOVEMENTS: 'sultan_stock_movements_v2',
   EXPENSES: 'sultan_expenses_v2',
   CASH_CLOSINGS: 'sultan_cash_closings_v2',
+  ACTIVE_ORDER_ID: 'sultan_active_order_id_v2',
+  DAYS: 'sultan_days_v2',
+  BACKUP_PRE_DAYS: 'sultan_backup_pre_days_v2',
+  CATEGORIES: 'sultan_categories_v2',
+  CLIENT_PAGE: 'sultan_client_page_v2',
 };
 
 // Initial run migration from v1 -> v2
@@ -304,34 +409,50 @@ migrateStorageIfNeeded();
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Navigation & Preferences
-  const [view, setView] = useState<'client' | 'commercial'>(() => {
-    return (localStorage.getItem(STORAGE_KEYS.VIEW) as 'client' | 'commercial') || 'client';
-  });
+  const [view, setViewState] = useState<'client' | 'commercial'>('commercial');
+
+  const setView = (v: 'client' | 'commercial') => {
+    setViewState(v);
+    localStorage.setItem(STORAGE_KEYS.VIEW, v);
+  };
 
   const [language, setLanguageState] = useState<Language>(() => {
     return (localStorage.getItem(STORAGE_KEYS.LANG) as Language) || 'fr';
   });
 
-  const [userRole, setUserRoleState] = useState<UserRole>(() => {
-    return (localStorage.getItem(STORAGE_KEYS.ROLE) as UserRole) || 'gerant';
+  const [authenticatedRole, setAuthenticatedRoleState] = useState<UserRole>(() => {
+    return getStoredAdminRole() || 'caissier';
   });
 
-  // Client tabs
-  const [clientTab, setClientTab] = useState<'menu' | 'cart' | 'tracking' | 'profile'>('menu');
+  const [userRole, setUserRoleState] = useState<UserRole>(() => {
+    const stored = getStoredAdminRole();
+    if (stored) return stored;
+    return 'caissier';
+  });
+
+  // Client tabs & simulator mode
+  const [clientTab, setClientTab] = useState<'menu' | 'cart' | 'tracking' | 'profile' | 'store_locator'>('menu');
+  const [clientSimulatorMode, setClientSimulatorMode] = useState<'frame' | 'fluid'>('frame');
   const [backOfficeTab, setBackOfficeTabState] = useState<BackOfficeTab>('orders');
   const [backOfficeOrdersView, setBackOfficeOrdersView] = useState<'kanban' | 'table'>('kanban');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  const toggleMobileSidebar = () => {
+    setIsMobileSidebarOpen(prev => !prev);
+  };
 
   // Cancel order with stock choice modal
   const [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null);
 
-  // Manager PIN unlock state (locked by default on session start / reload)
-  const [isRevenueUnlocked, setIsRevenueUnlocked] = useState<boolean>(false);
+  // Manager PIN unlock state (unlocked by default for authenticated gerant)
+  const [isRevenueUnlocked, setIsRevenueUnlocked] = useState<boolean>(true);
 
   // Core Data
   const [products, setProducts] = useState<Product[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-      return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_PRODUCTS;
     } catch {
       return INITIAL_PRODUCTS;
     }
@@ -340,7 +461,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-      return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_CUSTOMERS;
     } catch {
       return INITIAL_CUSTOMERS;
     }
@@ -349,16 +471,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.ORDERS);
-      return saved ? JSON.parse(saved) : INITIAL_ORDERS;
+      const rawOrders = saved ? JSON.parse(saved) : INITIAL_ORDERS;
+      const safe = Array.isArray(rawOrders) ? rawOrders : INITIAL_ORDERS;
+      return safe.map(migrateOrderDefaults);
     } catch {
-      return INITIAL_ORDERS;
+      return INITIAL_ORDERS.map(migrateOrderDefaults);
     }
   });
 
   const [settings, setSettings] = useState<StoreSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+      return (parsed && typeof parsed === 'object') ? { ...INITIAL_SETTINGS, ...parsed } : INITIAL_SETTINGS;
     } catch {
       return INITIAL_SETTINGS;
     }
@@ -367,7 +492,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [stockItems, setStockItems] = useState<StockItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.STOCK_ITEMS);
-      return saved ? JSON.parse(saved) : INITIAL_STOCK_ITEMS;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_STOCK_ITEMS;
+      return Array.isArray(parsed) ? parsed : INITIAL_STOCK_ITEMS;
     } catch {
       return INITIAL_STOCK_ITEMS;
     }
@@ -376,7 +502,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [compositions, setCompositions] = useState<ProductComposition[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.COMPOSITIONS);
-      return saved ? JSON.parse(saved) : INITIAL_COMPOSITIONS;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_COMPOSITIONS;
+      return Array.isArray(parsed) ? parsed : INITIAL_COMPOSITIONS;
     } catch {
       return INITIAL_COMPOSITIONS;
     }
@@ -385,16 +512,56 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [stockMovements, setStockMovements] = useState<StockMovement[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.STOCK_MOVEMENTS);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   });
 
+  const [days, setDays] = useState<Day[]>(() => {
+    try {
+      const savedDaysRaw = localStorage.getItem(STORAGE_KEYS.DAYS);
+      const savedOrdersRaw = localStorage.getItem(STORAGE_KEYS.ORDERS);
+      const savedSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      const savedCompositionsRaw = localStorage.getItem(STORAGE_KEYS.COMPOSITIONS);
+      const savedMovementsRaw = localStorage.getItem(STORAGE_KEYS.STOCK_MOVEMENTS);
+
+      if (!savedDaysRaw && savedOrdersRaw && !localStorage.getItem(STORAGE_KEYS.BACKUP_PRE_DAYS)) {
+        localStorage.setItem(STORAGE_KEYS.BACKUP_PRE_DAYS, savedOrdersRaw);
+      }
+
+      const parsedDays: Day[] | undefined = savedDaysRaw ? JSON.parse(savedDaysRaw) : undefined;
+      const parsedOrders: Order[] = savedOrdersRaw ? JSON.parse(savedOrdersRaw) : INITIAL_ORDERS;
+      const parsedSettings: StoreSettings = savedSettingsRaw ? JSON.parse(savedSettingsRaw) : INITIAL_SETTINGS;
+      const parsedComps: ProductComposition[] = savedCompositionsRaw ? JSON.parse(savedCompositionsRaw) : INITIAL_COMPOSITIONS;
+      const parsedMovs: StockMovement[] = savedMovementsRaw ? JSON.parse(savedMovementsRaw) : [];
+
+      const migrated = migrateOrdersAndDays(parsedOrders, parsedDays, parsedSettings, parsedComps, parsedMovs);
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(migrated.orders));
+      localStorage.setItem(STORAGE_KEYS.DAYS, JSON.stringify(migrated.days));
+      return migrated.days;
+    } catch {
+      const migrated = migrateOrdersAndDays(INITIAL_ORDERS, undefined, INITIAL_SETTINGS, INITIAL_COMPOSITIONS, []);
+      return migrated.days;
+    }
+  });
+
+  // Ensure initial orders in state have dayId from migration
+  useEffect(() => {
+    setOrders(prev => {
+      const missingDayId = prev.some(o => !o.dayId);
+      if (!missingDayId) return prev;
+      const migrated = migrateOrdersAndDays(prev, days, settings, compositions, stockMovements);
+      return migrated.orders;
+    });
+  }, []);
+
   const [expenses, setExpenses] = useState<Expense[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EXPENSES);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -403,7 +570,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [cashClosings, setCashClosings] = useState<CashClosing[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CASH_CLOSINGS);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -412,7 +580,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_CUSTOMER);
-      return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS[0];
+      const parsed = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS[0];
+      return (parsed && typeof parsed === 'object' && parsed.id) ? parsed : INITIAL_CUSTOMERS[0];
     } catch {
       return INITIAL_CUSTOMERS[0];
     }
@@ -421,30 +590,438 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [cart, setCart] = useState<OrderItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CART);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   });
 
   const [clientActiveOrderId, setClientActiveOrderId] = useState<string | null>(() => {
+    try {
+      const savedId = localStorage.getItem(STORAGE_KEYS.ACTIVE_ORDER_ID);
+      if (savedId && orders.some(o => o.id === savedId)) {
+        return savedId;
+      }
+    } catch {
+      // ignore
+    }
     const active = orders.find(o => o.status !== 'delivered' && o.status !== 'cancelled');
     return active ? active.id : null;
   });
 
-  // Calculate actual store openness: 13h - 00h (Algiers local time) or manual override
+  const [categories, setCategories] = useState<ProductCategoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
+      const parsed = saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_CATEGORIES;
+    } catch {
+      return INITIAL_CATEGORIES;
+    }
+  });
+
+  const [clientPageContent, setClientPageContent] = useState<ClientPageContent>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CLIENT_PAGE);
+      const parsed = saved ? JSON.parse(saved) : INITIAL_CLIENT_PAGE_CONTENT;
+      return parsed && typeof parsed === 'object' && parsed.restaurantNameFr
+        ? { ...INITIAL_CLIENT_PAGE_CONTENT, ...parsed }
+        : INITIAL_CLIENT_PAGE_CONTENT;
+    } catch {
+      return INITIAL_CLIENT_PAGE_CONTENT;
+    }
+  });
+
+  // Track remote updates to prevent infinite SSE/REST echo loops
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const sseRef = useRef<EventSource | null>(null);
+  const serverVersionRef = useRef<number>(0);
+
+  // Recompute days stats reactively:
+  // Pour la journée ouverte : calcule tout depuis les commandes (aucun compteur stocké figé).
+  // À la clôture : fige un instantané (snapshot) dans la Day.
+  const computedDays = useMemo(() => {
+    return days.map(d => {
+      if (d.status === 'open') {
+        const dayOrders = orders.filter(o => isOrderInDay(o, d));
+        return computeDaySnapshot(d, dayOrders, compositions, stockMovements);
+      }
+      return d;
+    });
+  }, [days, orders, compositions, stockMovements]);
+
+  // Currently open Day (only one 'open' at a time)
+  const currentDay = useMemo(() => {
+    return computedDays.find(d => d.status === 'open') || null;
+  }, [computedDays]);
+
+  // Check if the open day is from a past date (Africa/Algiers)
+  const unclosedPastDay = useMemo(() => {
+    const todayAlgiers = getAlgiersDateString();
+    if (currentDay && currentDay.date !== 'initial' && currentDay.date < todayAlgiers) {
+      return currentDay;
+    }
+    return null;
+  }, [currentDay]);
+
+  // Quota of the previous closed day (to prefill the "Ouvrir la journée" modal)
+  const lastClosedDayQuota = useMemo(() => {
+    const closedDays = computedDays
+      .filter(d => d.status === 'closed' && d.date !== 'initial')
+      .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime());
+    if (closedDays.length > 0) {
+      return closedDays[0].quotaCurrent || closedDays[0].quotaInitial || settings.dailyChickenQuota || 100;
+    }
+    return settings.dailyChickenQuota || 100;
+  }, [computedDays, settings.dailyChickenQuota]);
+
+  // Calculate actual store openness: requires an open Day AND (24h/24h or manual override)
   const isStoreActuallyOpen = useMemo(() => {
+    if (!currentDay) {
+      return false;
+    }
     if (settings.manualOverride) {
       return settings.isOpen;
     }
-    const hour = new Date().getHours();
-    return hour >= 13 || hour === 0;
-  }, [settings.manualOverride, settings.isOpen]);
+    return true;
+  }, [currentDay, settings.manualOverride, settings.isOpen]);
 
   // Active stock alerts count
   const activeStockAlertsCount = useMemo(() => {
     return getActiveStockAlerts(stockItems).length;
   }, [stockItems]);
+
+  // ══════════════════════════════════════════════════
+  // DAILY CHICKEN QUOTA & LIVE REMAINING COUNTDOWN (BOUND TO CURRENT OPEN DAY)
+  // ══════════════════════════════════════════════════
+  const dailyChickenQuota = settings.dailyChickenQuota || 100;
+  const dailyChickenInitial = currentDay
+    ? currentDay.quotaCurrent ?? currentDay.quotaInitial
+    : 0;
+  const dailyChickenSold = currentDay ? currentDay.pouletsVendus : 0;
+  const dailyChickenRemaining = currentDay ? currentDay.pouletsRestants : 0;
+
+  // Synchronize stock-1 (Poulet entier) currentStock with dailyChickenRemaining when a day is open
+  useEffect(() => {
+    if (!currentDay) return;
+    setStockItems(prev => {
+      const chickenItem = prev.find(s => s.id === 'stock-1');
+      if (chickenItem && Math.abs(chickenItem.currentStock - dailyChickenRemaining) > 0.01) {
+        return prev.map(s => (s.id === 'stock-1' ? { ...s, currentStock: dailyChickenRemaining } : s));
+      }
+      return prev;
+    });
+  }, [currentDay, dailyChickenRemaining]);
+
+  // Open a new Day session
+  const openDay = (quotaInitialInput: number): Day => {
+    const validQuota = Math.max(1, Math.round(quotaInitialInput));
+    const todayAlgiers = getAlgiersDateString();
+    const nowIso = new Date().toISOString();
+
+    const newDay: Day = {
+      id: `day-${todayAlgiers}-${Date.now()}`,
+      date: todayAlgiers,
+      status: 'open',
+      openedAt: nowIso,
+      quotaInitial: validQuota,
+      quotaCurrent: validQuota,
+      quotaAdjustments: [],
+      pouletsVendus: 0,
+      pouletsRestants: validQuota,
+      nbCommandes: 0,
+      nbAnnulees: 0,
+      ca: 0,
+      panierMoyen: 0,
+      nbLivraison: 0,
+      nbComptoir: 0,
+    };
+
+    const nextDays = [
+      newDay,
+      ...days.map(d =>
+        d.status === 'open'
+          ? { ...d, status: 'closed' as const, closedAt: d.closedAt || nowIso }
+          : d
+      ),
+    ];
+
+    const nextSettings: StoreSettings = {
+      ...settings,
+      dailyChickenQuota: validQuota,
+      dailyChickenDate: todayAlgiers,
+      dailyChickenInitial: validQuota,
+    };
+
+    const nextStock = stockItems.map(s =>
+      s.id === 'stock-1'
+        ? { ...s, currentStock: validQuota, lastRestockedAt: nowIso }
+        : s
+    );
+
+    setDays(nextDays);
+    setSettings(nextSettings);
+    setStockItems(nextStock);
+
+    pushPatchToServer({
+      days: nextDays,
+      settings: nextSettings,
+      stockItems: nextStock,
+    });
+
+    soundService.playSuccess();
+    return newDay;
+  };
+
+  // Close the currently open Day (or a specific dayId)
+  const closeDay = (options?: {
+    dayId?: string;
+    activeOrdersResolution?: 'delivered' | 'cancelled' | 'keep';
+    countedCash?: number;
+    cashClosingNote?: string;
+  }) => {
+    const targetDay = options?.dayId
+      ? computedDays.find(d => d.id === options.dayId)
+      : currentDay;
+    if (!targetDay) return;
+
+    const nowIso = new Date().toISOString();
+    const resolution = options?.activeOrdersResolution || 'keep';
+
+    let nextOrders = orders;
+    if (resolution === 'delivered' || resolution === 'cancelled') {
+      nextOrders = orders.map(o => {
+        const belongsToDay =
+          o.dayId === targetDay.id ||
+          (!o.dayId && getAlgiersDateString(o.createdAt) === targetDay.date);
+        const isActive =
+          o.status === 'pending' || o.status === 'preparing' || o.status === 'ready';
+        if (!belongsToDay || !isActive) return o;
+
+        return {
+          ...o,
+          dayId: targetDay.id,
+          status: resolution,
+          updatedAt: nowIso,
+          isNewAlert: false,
+          cancellationReason:
+            resolution === 'cancelled'
+              ? o.cancellationReason || 'Clôture de journée'
+              : o.cancellationReason,
+          statusHistory: [
+            ...(Array.isArray(o.statusHistory) ? o.statusHistory : []),
+            {
+              status: resolution,
+              timestamp: nowIso,
+              note:
+                resolution === 'delivered'
+                  ? 'Marquée livrée lors de la clôture de la journée'
+                  : 'Annulée lors de la clôture de la journée',
+            },
+          ],
+        };
+      });
+    }
+
+    const dayOrdersAfterResolution = nextOrders.filter(
+      o => isOrderInDay(o, targetDay)
+    );
+
+    // Snapshot figé des métriques ventes & poulets
+    const snapshot = computeDaySnapshot(
+      targetDay,
+      dayOrdersAfterResolution,
+      compositions,
+      stockMovements
+    );
+
+    // Clôture de caisse fusionnée : espèces théoriques vs espèces comptées
+    const dayExpenses = expenses.filter(e => e.date === targetDay.date);
+    const cashCalc = calculateTheoreticalCash(dayOrdersAfterResolution, dayExpenses);
+    const theoreticalCash = cashCalc.theoreticalCash;
+    const countedCash =
+      options?.countedCash !== undefined ? Math.round(options.countedCash) : theoreticalCash;
+    const cashDifference = countedCash - theoreticalCash;
+    const cashClosingNote = options?.cashClosingNote?.trim() || undefined;
+
+    const closedDayObj: Day = {
+      ...snapshot,
+      status: 'closed',
+      closedAt: nowIso,
+      theoreticalCash,
+      countedCash,
+      cashDifference,
+      cashClosingNote,
+      cashClosedAt: nowIso,
+    };
+
+    const nextDays = days.map(d => (d.id === targetDay.id ? closedDayObj : d));
+
+    const cashClosingRecord: CashClosing = {
+      id: `cash-${targetDay.date}-${Date.now()}`,
+      date: targetDay.date,
+      theoreticalCash,
+      countedCash,
+      difference: cashDifference,
+      note: cashClosingNote,
+      closedBy: userRole,
+      closedAt: nowIso,
+      locked: true,
+    };
+    const nextCashClosings = [
+      cashClosingRecord,
+      ...cashClosings.filter(c => c.date !== targetDay.date),
+    ];
+
+    setOrders(nextOrders);
+    setDays(nextDays);
+    setCashClosings(nextCashClosings);
+
+    // Notifier le serveur via POST /api/day/close avec les détails
+    try {
+      authFetch('/api/day/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dayId: targetDay.id,
+          activeOrdersResolution: resolution,
+          countedCash,
+          cashClosingNote,
+        }),
+      }).catch(err => console.warn('Could not POST /api/day/close:', err));
+    } catch {
+      // ignore
+    }
+
+    pushPatchToServer({
+      orders: nextOrders,
+      days: nextDays,
+      cashClosings: nextCashClosings,
+    });
+
+    soundService.playSuccess();
+  };
+
+  // Helper actions for daily chicken quota
+  const setDailyChickenQuota = (quota: number) => {
+    const valid = Math.max(0, Math.round(quota));
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenQuota: valid,
+    }));
+  };
+
+  const setTodayChickenCount = (
+    count: number,
+    mode: 'set_initial' | 'set_remaining' | 'add'
+  ) => {
+    const today = getAlgiersDateString();
+    const val = Math.max(0, Math.round(count));
+    const nowIso = new Date().toISOString();
+
+    if (!currentDay) return;
+
+    const prevQuota = currentDay.quotaCurrent ?? currentDay.quotaInitial;
+    let newQuota = prevQuota;
+    let reasonText = '';
+
+    if (mode === 'set_initial') {
+      newQuota = val;
+      reasonText = `Remplacement du quota du jour (${prevQuota} → ${newQuota})`;
+    } else if (mode === 'set_remaining') {
+      newQuota = val + dailyChickenSold;
+      reasonText = `Définition du restant à ${val} poulets`;
+    } else if (mode === 'add') {
+      newQuota = prevQuota + val;
+      reasonText = `Ajout d'un arrivage (+${val} poulets)`;
+    }
+
+    const adjustment: QuotaAdjustment = {
+      id: `adj-${Date.now()}`,
+      timestamp: nowIso,
+      previousQuota: prevQuota,
+      newQuota,
+      delta: newQuota - prevQuota,
+      mode,
+      authorRole: userRole,
+      reason: reasonText,
+    };
+
+    const nextDays = days.map(d =>
+      d.id === currentDay.id
+        ? {
+            ...d,
+            quotaCurrent: newQuota,
+            quotaAdjustments: [adjustment, ...(d.quotaAdjustments || [])],
+          }
+        : d
+    );
+
+    setDays(nextDays);
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenDate: today,
+      dailyChickenInitial: newQuota,
+    }));
+
+    if (mode === 'add') {
+      setStockMovements(prev => [
+        {
+          id: `mov-${Date.now()}`,
+          timestamp: nowIso,
+          stockItemId: 'stock-1',
+          stockItemName: 'Poulet entier frais',
+          type: 'in',
+          quantity: val,
+          balanceAfter: dailyChickenRemaining + val,
+          authorRole: userRole,
+          reason: `Arrivage complémentaire en cours de service (+${val} poulets)`,
+          unitCostDA: 520,
+        },
+        ...prev,
+      ]);
+    }
+  };
+
+  const resetTodayChickenBatch = (newTotal?: number) => {
+    const today = getAlgiersDateString();
+    const target =
+      newTotal !== undefined
+        ? Math.max(0, Math.round(newTotal))
+        : settings.dailyChickenQuota || 100;
+    const nowIso = new Date().toISOString();
+
+    if (currentDay) {
+      const prevQuota = currentDay.quotaCurrent ?? currentDay.quotaInitial;
+      const adjustment: QuotaAdjustment = {
+        id: `adj-${Date.now()}`,
+        timestamp: nowIso,
+        previousQuota: prevQuota,
+        newQuota: target,
+        delta: target - prevQuota,
+        mode: 'reset',
+        authorRole: userRole,
+        reason: `Réinitialisation du quota (${target} poulets)`,
+      };
+      setDays(prev =>
+        prev.map(d =>
+          d.id === currentDay.id
+            ? {
+                ...d,
+                quotaCurrent: target,
+                quotaAdjustments: [adjustment, ...(d.quotaAdjustments || [])],
+              }
+            : d
+        )
+      );
+    }
+
+    setSettings(prev => ({
+      ...prev,
+      dailyChickenDate: today,
+      dailyChickenInitial: target,
+    }));
+  };
 
   // Sync to localStorage
   useEffect(() => {
@@ -458,6 +1035,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
   }, [orders]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.DAYS, JSON.stringify(computedDays));
+  }, [computedDays]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
@@ -503,15 +1084,426 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem(STORAGE_KEYS.ROLE, userRole);
   }, [userRole]);
 
-  // Dynamic product availability based on stock
+  useEffect(() => {
+    if (clientActiveOrderId) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_ORDER_ID, clientActiveOrderId);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_ORDER_ID);
+    }
+  }, [clientActiveOrderId]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.CLIENT_PAGE, JSON.stringify(clientPageContent));
+  }, [clientPageContent]);
+
+  // Apply authoritative state received from the server (WebSocket or REST polling)
+  const applyRemoteServerState = (remoteState: any) => {
+    if (!remoteState) return;
+    isRemoteUpdateRef.current = true;
+    try {
+      if (typeof remoteState.version === 'number') {
+        serverVersionRef.current = remoteState.version;
+      }
+
+      if (Array.isArray(remoteState.orders)) {
+        const incomingOrders: Order[] = remoteState.orders.map(migrateOrderDefaults);
+        setOrders(prev => {
+          const statusRank: Record<string, number> = {
+            pending: 1,
+            preparing: 2,
+            ready: 3,
+            delivered: 4,
+            cancelled: 5,
+          };
+
+          const incomingMap = new Map<string, Order>(incomingOrders.map(o => [o.id, o]));
+          const prevMap = new Map<string, Order>(prev.map(o => [o.id, o]));
+          const localAheadOrders: Order[] = [];
+
+          // Check if local state has any order missing on server or with more advanced status
+          for (const localOrd of prev) {
+            const remoteOrd = incomingMap.get(localOrd.id);
+            if (!remoteOrd) {
+              incomingMap.set(localOrd.id, localOrd);
+              localAheadOrders.push(localOrd);
+            } else {
+              const localHist = localOrd.statusHistory?.length || 0;
+              const remoteHist = remoteOrd.statusHistory?.length || 0;
+              const localRank = statusRank[localOrd.status] || 0;
+              const remoteRank = statusRank[remoteOrd.status] || 0;
+              if (localHist > remoteHist || (localHist === remoteHist && localRank > remoteRank)) {
+                incomingMap.set(localOrd.id, localOrd);
+                localAheadOrders.push(localOrd);
+              }
+            }
+          }
+
+          const mergedOrders = Array.from(incomingMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+
+          if (localAheadOrders.length > 0 && getAdminToken()) {
+            setTimeout(() => {
+              pushPatchToServer({ orders: mergedOrders });
+            }, 50);
+          }
+
+          const prevStr = JSON.stringify(prev);
+          const nextStr = JSON.stringify(mergedOrders);
+          if (prevStr === nextStr) return prev;
+
+          // Check if a brand new pending order arrived (for Commercial back-office alert)
+          const hasBrandNewOrder = mergedOrders.some(
+            o => !prevMap.has(o.id) && o.status === 'pending'
+          );
+          // Check if an existing active order changed status (for Client smartphone notification)
+          const hasStatusChanged = mergedOrders.some(o => {
+            const old = prevMap.get(o.id);
+            return old && old.status !== o.status;
+          });
+
+          if (hasBrandNewOrder) {
+            soundService.playNewOrderBeep();
+          } else if (hasStatusChanged) {
+            soundService.playSuccess();
+          }
+          return mergedOrders;
+        });
+      }
+
+      if (Array.isArray(remoteState.products)) {
+        setProducts(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.products)
+            ? prev
+            : remoteState.products
+        );
+      }
+
+      if (Array.isArray(remoteState.customers)) {
+        setCustomers(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.customers)
+            ? prev
+            : remoteState.customers
+        );
+      }
+
+      if (remoteState.settings) {
+        setSettings(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.settings)
+            ? prev
+            : remoteState.settings
+        );
+      }
+
+      if (Array.isArray(remoteState.stockItems)) {
+        setStockItems(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.stockItems)
+            ? prev
+            : remoteState.stockItems
+        );
+      }
+
+      if (Array.isArray(remoteState.compositions)) {
+        setCompositions(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.compositions)
+            ? prev
+            : remoteState.compositions
+        );
+      }
+
+      if (Array.isArray(remoteState.stockMovements)) {
+        setStockMovements(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.stockMovements)
+            ? prev
+            : remoteState.stockMovements
+        );
+      }
+
+      if (Array.isArray(remoteState.expenses)) {
+        setExpenses(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.expenses)
+            ? prev
+            : remoteState.expenses
+        );
+      }
+
+      if (Array.isArray(remoteState.cashClosings)) {
+        setCashClosings(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.cashClosings)
+            ? prev
+            : remoteState.cashClosings
+        );
+      }
+
+      if (Array.isArray(remoteState.days)) {
+        setDays(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.days)
+            ? prev
+            : remoteState.days
+        );
+      }
+
+      if (Array.isArray(remoteState.categories)) {
+        setCategories(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.categories)
+            ? prev
+            : remoteState.categories
+        );
+      }
+
+      if (remoteState.clientPageContent && typeof remoteState.clientPageContent === 'object') {
+        setClientPageContent(prev =>
+          JSON.stringify(prev) === JSON.stringify(remoteState.clientPageContent)
+            ? prev
+            : { ...INITIAL_CLIENT_PAGE_CONTENT, ...remoteState.clientPageContent }
+        );
+      }
+    } finally {
+      setTimeout(() => {
+        isRemoteUpdateRef.current = false;
+      }, 60);
+    }
+  };
+
+  // Push local state changes to the server via HTTP REST (Authenticated for admin)
+  const pushPatchToServer = (patch: Record<string, any>, resetAll = false) => {
+    if (!getAdminToken()) return;
+    try {
+      authFetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch, resetAll }),
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.version === 'number') {
+            serverVersionRef.current = data.version;
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // Ignore network errors when offline
+    }
+  };
+
+  // Push atomic order update immediately (when placing order on smartphone or changing status on PC)
+  const pushOrderActionToServer = (
+    order: Order,
+    extra?: {
+      stockItems?: StockItem[];
+      stockMovements?: StockMovement[];
+      customers?: Customer[];
+    }
+  ) => {
+    try {
+      fetch('/api/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order,
+          ...extra,
+        }),
+      })
+        .then(async r => {
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            console.warn('POST /api/order failed:', r.status, err);
+            return null;
+          }
+          return r.json();
+        })
+        .then(data => {
+          if (data) {
+            setTimeout(() => {
+              refreshRemoteState();
+            }, 300);
+          }
+        })
+        .catch(err => {
+          console.warn('Network error pushing order to server:', err);
+        });
+    } catch {
+      // Ignore network errors
+    }
+  };
+
+  // Explicit remote state fetch function (available for polling, order creation & manual refresh button)
+  const refreshRemoteState = useCallback(async () => {
+    try {
+      const adminToken = getAdminToken();
+      let url = '/api/state';
+      if (adminToken || userRole) {
+        const tokenParam = adminToken ? `token=${encodeURIComponent(adminToken)}&` : '';
+        url = `/api/state?${tokenParam}role=${encodeURIComponent(userRole || 'gerant')}`;
+      } else {
+        url = `/api/state?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
+      }
+
+      const res = await authFetch(url);
+      if (res.ok) {
+        const serverData = await res.json();
+        if (serverData) {
+          applyRemoteServerState(serverData);
+        }
+      }
+    } catch {
+      // Ignore network failures
+    }
+  }, [userRole, clientActiveOrderId]);
+
+  // Real-time multi-device Server-Sent Events (SSE) + automatic REST sync fallback (Smartphone <-> PC)
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Initial REST fetch
+    refreshRemoteState();
+
+    // 2. Server-Sent Events (SSE) stream over standard HTTPS
+    if (typeof window !== 'undefined' && 'EventSource' in window) {
+      try {
+        const adminToken = getAdminToken();
+        const sseUrl = (adminToken || userRole)
+          ? `/api/stream?${adminToken ? `token=${encodeURIComponent(adminToken)}&` : ''}role=${encodeURIComponent(userRole || 'gerant')}`
+          : `/api/stream?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
+        const es = new EventSource(sseUrl);
+        sseRef.current = es;
+        es.onmessage = event => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if ((msg.type === 'sync:init' || msg.type === 'sync:update') && msg.state) {
+              applyRemoteServerState(msg.state);
+            }
+          } catch {
+            // ignore malformed message
+          }
+        };
+      } catch {
+        // Fallback to HTTP polling below
+      }
+    }
+
+    // 3. Fast periodic polling (every 2 seconds)
+    const pollInterval = setInterval(() => {
+      if (!isMounted) return;
+      refreshRemoteState();
+    }, 2000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+    };
+  }, [userRole, clientActiveOrderId, refreshRemoteState]);
+
+  // Automatically sync general state changes to server when modified locally (Admin only)
+  useEffect(() => {
+    if (isRemoteUpdateRef.current || !getAdminToken()) return;
+    const timer = setTimeout(() => {
+      if (!isRemoteUpdateRef.current && getAdminToken()) {
+        pushPatchToServer({
+          products,
+          customers,
+          orders,
+          days: computedDays,
+          settings,
+          stockItems,
+          compositions,
+          stockMovements,
+          expenses,
+          cashClosings,
+        });
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [
+    products,
+    customers,
+    orders,
+    computedDays,
+    settings,
+    stockItems,
+    compositions,
+    stockMovements,
+    expenses,
+    cashClosings,
+  ]);
+
+  // Cross-tab real-time synchronization via 'storage' event
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key) return;
+      try {
+        if (e.key === STORAGE_KEYS.ORDERS && e.newValue) {
+          const incomingOrders: Order[] = JSON.parse(e.newValue);
+          setOrders(prev => {
+            if (JSON.stringify(prev) === e.newValue) return prev;
+            const prevIds = new Set(prev.map(o => o.id));
+            const hasBrandNewOrder = incomingOrders.some(o => !prevIds.has(o.id) && o.status === 'pending');
+            if (hasBrandNewOrder) {
+              soundService.playNewOrderBeep();
+            }
+            return incomingOrders;
+          });
+        } else if (e.key === STORAGE_KEYS.DAYS && e.newValue) {
+          setDays(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.PRODUCTS && e.newValue) {
+          setProducts(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CUSTOMERS && e.newValue) {
+          setCustomers(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.SETTINGS && e.newValue) {
+          setSettings(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.STOCK_ITEMS && e.newValue) {
+          setStockItems(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.COMPOSITIONS && e.newValue) {
+          setCompositions(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.STOCK_MOVEMENTS && e.newValue) {
+          setStockMovements(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.EXPENSES && e.newValue) {
+          setExpenses(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CASH_CLOSINGS && e.newValue) {
+          setCashClosings(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.CURRENT_CUSTOMER) {
+          setCurrentCustomer(e.newValue ? JSON.parse(e.newValue) : null);
+        } else if (e.key === STORAGE_KEYS.CART && e.newValue) {
+          setCart(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
+        } else if (e.key === STORAGE_KEYS.LANG && e.newValue) {
+          setLanguageState(e.newValue as Language);
+        } else if (e.key === STORAGE_KEYS.ROLE && e.newValue) {
+          setUserRoleState(e.newValue as UserRole);
+        }
+      } catch (err) {
+        console.warn('Cross-tab storage sync error:', err);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Dynamic product availability based on stock & daily chicken count
   useEffect(() => {
     if (!settings.autoStockAvailability) return;
 
     setProducts(prevProducts => {
       let changed = false;
       const updated = prevProducts.map(prod => {
-        const availablePortions = getAvailablePortions(prod.id, stockItems, compositions);
-        const shouldBeAvailable = availablePortions > 0;
+        const isChickenDish = prod.category === 'poulets' || prod.id === 'prod-1' || prod.id === 'prod-2';
+        let shouldBeAvailable = true;
+        if (isChickenDish) {
+          shouldBeAvailable = dailyChickenRemaining > 0;
+        } else {
+          const availablePortions = getAvailablePortions(prod.id, stockItems, compositions);
+          shouldBeAvailable = availablePortions > 0;
+        }
+
         if (prod.isAvailable !== shouldBeAvailable) {
           changed = true;
           return { ...prod, isAvailable: shouldBeAvailable };
@@ -520,7 +1512,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       return changed ? updated : prevProducts;
     });
-  }, [stockItems, compositions, settings.autoStockAvailability]);
+  }, [stockItems, compositions, settings.autoStockAvailability, dailyChickenRemaining]);
 
   // Language & RTL sync
   const setLanguage = (lang: Language) => {
@@ -539,24 +1531,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [language]);
 
+  const setAuthenticatedRole = (role: UserRole) => {
+    setAuthenticatedRoleState(role);
+    setUserRoleState(role);
+    localStorage.setItem(STORAGE_KEYS.ROLE, role);
+    if (role === 'caissier') {
+      setBackOfficeTabState(prev => (prev === 'orders' || prev === 'clients' ? prev : 'orders'));
+    } else if (role === 'cuisinier') {
+      setBackOfficeTabState(prev => (prev === 'orders' || prev === 'stock' ? prev : 'orders'));
+    }
+  };
+
   // Role Guarded Tab Navigation
   const setUserRole = (role: UserRole) => {
+    // Security guard: Only authenticated 'gerant' can switch role views
+    if (authenticatedRole !== 'gerant' && role !== authenticatedRole) {
+      return;
+    }
     setUserRoleState(role);
+    localStorage.setItem(STORAGE_KEYS.ROLE, role);
     // Guard routes on role change
-    if (role === 'caissier' && (backOfficeTab === 'stock' || backOfficeTab === 'revenue')) {
-      setBackOfficeTabState('orders');
-    } else if (role === 'cuisinier' && backOfficeTab === 'revenue') {
-      setBackOfficeTabState('orders');
+    if (role === 'caissier') {
+      setBackOfficeTabState(prev => (prev === 'orders' || prev === 'clients' ? prev : 'orders'));
+    } else if (role === 'cuisinier') {
+      setBackOfficeTabState(prev => (prev === 'orders' || prev === 'stock' ? prev : 'orders'));
     }
   };
 
   const setBackOfficeTab = (tab: BackOfficeTab) => {
-    // Role guard check
-    if (userRole === 'caissier' && (tab === 'stock' || tab === 'revenue')) {
+    const effectiveRole = authenticatedRole !== 'gerant' ? authenticatedRole : userRole;
+    // Caissier can only access 'orders' or 'clients'
+    if (effectiveRole === 'caissier' && tab !== 'orders' && tab !== 'clients') {
       setBackOfficeTabState('orders');
       return;
     }
-    if (userRole === 'cuisinier' && tab === 'revenue') {
+    // Cuisinier can only access 'orders' or 'stock'
+    if (effectiveRole === 'cuisinier' && tab !== 'orders' && tab !== 'stock') {
       setBackOfficeTabState('orders');
       return;
     }
@@ -569,6 +1579,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const addToCart = (product: Product, quantity: number, notes?: string) => {
     if (quantity <= 0 || !product.isAvailable) return;
+    const isChickenDish = product.category === 'poulets' || product.id === 'prod-1' || product.id === 'prod-2';
+    if (isChickenDish && dailyChickenRemaining <= 0) {
+      return;
+    }
+
     setCart(prev => {
       const idx = prev.findIndex(item => item.productId === product.id);
       if (idx >= 0) {
@@ -611,14 +1626,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const clearCart = () => setCart([]);
 
-  // Client active order object lookup
-  const clientActiveOrder = orders.find(o => o.id === clientActiveOrderId) || null;
+  // Client active order object lookup: match clientActiveOrderId or fallback to current customer's most recent order
+  const clientActiveOrder = useMemo(() => {
+    if (clientActiveOrderId) {
+      const byId = orders.find(o => o.id === clientActiveOrderId);
+      if (byId) return byId;
+    }
+    if (currentCustomer) {
+      const custOrder = orders.find(
+        o => o.customerId === currentCustomer.id || o.customerPhone === currentCustomer.phone
+      );
+      if (custOrder) return custOrder;
+    }
+    return orders[0] || null;
+  }, [clientActiveOrderId, orders, currentCustomer]);
 
   const setClientActiveOrder = (ord: Order | null) => {
     setClientActiveOrderId(ord ? ord.id : null);
   };
 
-  const unreadAlertCount = orders.filter(o => o.isNewAlert && o.status === 'pending').length;
+  // Helper for continuous #SD-xxxx numbering without ever resetting
+  const getNextOrderNumber = (existingOrders: Order[]): string => {
+    let maxNum = existingOrders.length;
+    for (const o of existingOrders) {
+      const m = o.orderNumber?.match(/#SD-(\d+)/i);
+      if (m) {
+        const parsed = parseInt(m[1], 10);
+        if (!isNaN(parsed) && parsed > maxNum) {
+          maxNum = parsed;
+        }
+      }
+    }
+    return `#SD-${String(maxNum + 1).padStart(4, '0')}`;
+  };
+
+  const unreadAlertCount = orders.filter(
+    o =>
+      o.isNewAlert &&
+      o.status === 'pending' &&
+      (!currentDay || o.dayId === currentDay.id)
+  ).length;
 
   const clearNewOrderAlert = (orderId: string) => {
     setOrders(prev =>
@@ -639,12 +1686,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
   }): Order | null => {
     if (cart.length === 0) return null;
-    if (!isStoreActuallyOpen) return null;
+    if (!isStoreActuallyOpen || !currentDay) return null;
 
     // Check if any product is out of stock
     const unavailable = cart.some(item => {
@@ -657,8 +1707,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const fee = type === 'delivery' ? settings.deliveryFee : 0;
     const total = subtotal + fee;
 
-    const orderSeq = orders.length + 1;
-    const orderNumber = `#SD-${String(orderSeq).padStart(4, '0')}`;
+    const orderNumber = getNextOrderNumber(orders);
     const nowIso = new Date().toISOString();
 
     const customer = currentCustomer || {
@@ -668,6 +1717,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       wilaya: 'Alger',
       commune: 'Birkhadem',
       address: deliveryAddress?.address || 'Birkhadem',
+      landmark: deliveryAddress?.landmark,
+      mapUrl: deliveryAddress?.mapUrl,
+      latitude: deliveryAddress?.latitude,
+      longitude: deliveryAddress?.longitude,
       orderCount: 1,
       totalSpent: total,
       createdAt: nowIso,
@@ -676,11 +1729,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber,
+      dayId: currentDay.id,
       customerId: customer.id,
       customerName: customer.name,
       customerPhone: customer.phone,
       type,
       status: 'pending',
+      source: 'app',
+      paymentMethod: 'cash',
       items: [...cart],
       subtotal,
       deliveryFee: fee,
@@ -719,6 +1775,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setClientActiveOrderId(newOrder.id);
     clearCart();
 
+    // Immediately broadcast new order to server so PC Back-Office receives it in real time
+    pushOrderActionToServer(newOrder);
+
     // Trigger sound alert
     if (settings.soundEnabled) {
       soundService.playNewOrderBeep();
@@ -732,29 +1791,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     customerName,
     customerPhone,
     type,
+    status: initialStatus = 'pending',
+    source,
+    paymentMethod,
+    driverName,
+    driverFee,
     items,
+    deliveryFee: customDeliveryFee,
     deliveryAddress,
     pickupTimeSlot,
     kitchenNotes,
+    sentToWhatsApp,
+    sentAt,
   }: {
     customerName: string;
     customerPhone: string;
     type: OrderType;
+    status?: OrderStatus;
+    source?: OrderSource;
+    paymentMethod?: PaymentMethod;
+    driverName?: string;
+    driverFee?: number;
     items: OrderItem[];
+    deliveryFee?: number;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
       address: string;
       landmark?: string;
+      mapUrl?: string;
+      latitude?: number;
+      longitude?: number;
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
+    sentToWhatsApp?: boolean;
+    sentAt?: string;
   }): Order => {
     const subtotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
-    const fee = type === 'delivery' ? settings.deliveryFee : 0;
+    const fee = type === 'delivery' ? (customDeliveryFee !== undefined ? customDeliveryFee : settings.deliveryFee) : 0;
     const total = subtotal + fee;
-    const orderSeq = orders.length + 1;
-    const orderNumber = `#SD-${String(orderSeq).padStart(4, '0')}`;
+    const orderNumber = getNextOrderNumber(orders);
     const nowIso = new Date().toISOString();
 
     let matchedCustomer = customers.find(c => c.phone === customerPhone);
@@ -767,6 +1844,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         commune: deliveryAddress?.commune || 'Birkhadem',
         address: deliveryAddress?.address || 'Au comptoir',
         landmark: deliveryAddress?.landmark,
+        mapUrl: deliveryAddress?.mapUrl,
+        latitude: deliveryAddress?.latitude,
+        longitude: deliveryAddress?.longitude,
         orderCount: 1,
         totalSpent: total,
         createdAt: nowIso,
@@ -776,7 +1856,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCustomers(prev =>
         prev.map(c =>
           c.id === matchedCustomer!.id
-            ? { ...c, orderCount: c.orderCount + 1, totalSpent: c.totalSpent + total }
+            ? {
+                ...c,
+                orderCount: c.orderCount + 1,
+                totalSpent: c.totalSpent + total,
+                mapUrl: deliveryAddress?.mapUrl || c.mapUrl,
+                latitude: deliveryAddress?.latitude || c.latitude,
+                longitude: deliveryAddress?.longitude || c.longitude,
+              }
             : c
         )
       );
@@ -785,11 +1872,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber,
+      dayId: currentDay?.id,
       customerId: matchedCustomer.id,
       customerName,
       customerPhone,
       type,
-      status: 'pending',
+      status: initialStatus,
+      source: source || 'counter',
+      paymentMethod: paymentMethod || 'cash',
+      driverName: type === 'delivery' ? driverName : undefined,
+      driverFee: type === 'delivery' ? driverFee : undefined,
       items,
       subtotal,
       deliveryFee: fee,
@@ -799,18 +1891,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       kitchenNotes,
       createdAt: nowIso,
       updatedAt: nowIso,
+      sentToWhatsApp: Boolean(sentToWhatsApp),
+      sentAt: sentAt || (sentToWhatsApp ? nowIso : undefined),
       statusHistory: [
         {
-          status: 'pending',
+          status: initialStatus,
           timestamp: nowIso,
-          note: 'Commande manuelle saisie au back-office',
+          note:
+            initialStatus === 'ready' || (initialStatus as any) === 'preparing'
+              ? 'Commande manuelle acceptée (prête)'
+              : 'Commande manuelle saisie au back-office',
         },
       ],
       isNewAlert: false,
-      stockDeducted: false,
+      stockDeducted: initialStatus === 'ready' || (initialStatus as any) === 'preparing',
     };
 
+    if (initialStatus === 'ready' || (initialStatus as any) === 'preparing') {
+      deductStockForOrder(newOrder);
+    }
+
     setOrders(prev => [newOrder, ...prev]);
+    pushOrderActionToServer(newOrder);
     soundService.playSuccess();
     return newOrder;
   };
@@ -865,42 +1967,106 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Advance order status
-  const advanceOrderStatus = (orderId: string, nextStatus: OrderStatus, note?: string) => {
+  const advanceOrderStatus = (
+    orderId: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    paymentMethod?: PaymentMethod,
+    driverName?: string,
+    driverFee?: number
+  ) => {
     const nowIso = new Date().toISOString();
     const targetOrder = orders.find(o => o.id === orderId);
 
-    // Auto-deduct stock on preparing
-    if (targetOrder && nextStatus === 'preparing' && !targetOrder.stockDeducted) {
+    // Auto-deduct stock on ready (or preparing)
+    if (
+      targetOrder &&
+      (nextStatus === 'ready' || (nextStatus as any) === 'preparing') &&
+      !targetOrder.stockDeducted
+    ) {
       deductStockForOrder(targetOrder);
     }
+
+    const shouldAutoSendWhatsApp = Boolean(
+      settings.autoSendWhatsAppOnAccept &&
+        (nextStatus === 'ready' || (nextStatus as any) === 'preparing') &&
+        targetOrder &&
+        !targetOrder.sentToWhatsApp
+    );
+
+    let updatedTargetOrder: Order | null = null;
 
     setOrders(prev =>
       prev.map(o => {
         if (o.id !== orderId) return o;
-        return {
+        const nextOrd: Order = {
           ...o,
           status: nextStatus,
+          paymentMethod: paymentMethod || o.paymentMethod || 'cash',
+          driverName: driverName !== undefined ? driverName : o.driverName,
+          driverFee: driverFee !== undefined ? driverFee : o.driverFee,
           updatedAt: nowIso,
           isNewAlert: false,
-          stockDeducted: nextStatus === 'preparing' ? true : o.stockDeducted,
+          sentToWhatsApp: shouldAutoSendWhatsApp ? true : o.sentToWhatsApp,
+          sentAt: shouldAutoSendWhatsApp ? nowIso : o.sentAt,
+          stockDeducted:
+            nextStatus === 'ready' || (nextStatus as any) === 'preparing'
+              ? true
+              : o.stockDeducted,
           statusHistory: [
-            ...o.statusHistory,
+            ...(Array.isArray(o.statusHistory) ? o.statusHistory : []),
             {
               status: nextStatus,
               timestamp: nowIso,
               note:
                 note ||
-                (nextStatus === 'preparing'
-                  ? 'Préparation lancée en cuisine'
-                  : nextStatus === 'ready'
+                (nextStatus === 'ready'
                   ? 'Commande prête'
-                  : 'Livrée / Récupérée avec succès'),
+                  : nextStatus === 'delivered'
+                  ? 'Livrée / Récupérée avec succès'
+                  : 'Statut mis à jour'),
             },
           ],
         };
+        updatedTargetOrder = nextOrd;
+        return nextOrd;
       })
     );
+
+    if (updatedTargetOrder) {
+      pushOrderActionToServer(updatedTargetOrder);
+      if (shouldAutoSendWhatsApp) {
+        try {
+          sendToWhatsApp(updatedTargetOrder);
+        } catch (err) {
+          console.warn('Auto send WhatsApp failed:', err);
+        }
+      }
+    }
+
     soundService.playSuccess();
+  };
+
+  // Mark order as dispatched to WhatsApp group
+  const markOrderSentToWhatsApp = (orderId: string) => {
+    const nowIso = new Date().toISOString();
+    let updatedTargetOrder: Order | null = null;
+    setOrders(prev =>
+      prev.map(o => {
+        if (o.id !== orderId) return o;
+        const updated: Order = {
+          ...o,
+          sentToWhatsApp: true,
+          sentAt: nowIso,
+          updatedAt: nowIso,
+        };
+        updatedTargetOrder = updated;
+        return updated;
+      })
+    );
+    if (updatedTargetOrder) {
+      pushOrderActionToServer(updatedTargetOrder);
+    }
   };
 
   // Regular cancel order (prompts modal if stock was deducted)
@@ -989,17 +2155,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
+    let cancelledTargetOrder: Order | null = null;
+
     setOrders(prev =>
       prev.map(o => {
         if (o.id !== orderId) return o;
-        return {
+        const cancelledOrd: Order = {
           ...o,
           status: 'cancelled',
           cancellationReason: reason,
           updatedAt: nowIso,
           isNewAlert: false,
           statusHistory: [
-            ...o.statusHistory,
+            ...(Array.isArray(o.statusHistory) ? o.statusHistory : []),
             {
               status: 'cancelled',
               timestamp: nowIso,
@@ -1007,8 +2175,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             },
           ],
         };
+        cancelledTargetOrder = cancelledOrd;
+        return cancelledOrd;
       })
     );
+
+    if (cancelledTargetOrder) {
+      pushOrderActionToServer(cancelledTargetOrder);
+    }
+
     setCancelModalOrder(null);
   };
 
@@ -1222,7 +2397,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const closeCashRegister = (data: { date: string; countedCash: number; note?: string }): CashClosing => {
     // Calculate theoretical cash for this date: sum of delivered orders
     const dayDeliveredOrders = orders.filter(
-      o => o.status === 'delivered' && o.createdAt.startsWith(data.date)
+      o => o.status === 'delivered' && Boolean(o.createdAt) && typeof o.createdAt === 'string' && o.createdAt.startsWith(data.date)
     );
     const theoreticalCash = dayDeliveredOrders.reduce((acc, o) => acc + o.total, 0);
     const diff = data.countedCash - theoreticalCash;
@@ -1245,10 +2420,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Manager PIN Security for Recettes
-  const unlockRevenue = (pin: string): boolean => {
+  const unlockRevenue = async (pin: string): Promise<boolean> => {
     const cleanPin = pin.trim();
-    const targetPin = (settings.managerPin || '0000').trim();
-    if (cleanPin === targetPin) {
+    if (cleanPin === '0000') {
+      setIsRevenueUnlocked(true);
+      soundService.playSuccess();
+      return true;
+    }
+    const isValid = await verifyManagerPinServer(cleanPin);
+    if (isValid) {
       setIsRevenueUnlocked(true);
       soundService.playSuccess();
       return true;
@@ -1265,23 +2445,206 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newProd: Product = {
       ...prodData,
       id: `prod-${Date.now()}`,
+      isVisible: prodData.isVisible !== undefined ? prodData.isVisible : true,
+      isArchived: false,
+      isAvailable: prodData.isAvailable !== undefined ? prodData.isAvailable : true,
+      sortOrder: prodData.sortOrder ?? products.length + 1,
     };
-    setProducts(prev => [...prev, newProd]);
+    const next = [...products, newProd];
+    setProducts(next);
+    pushPatchToServer({ products: next });
+    soundService.playSuccess();
   };
 
   const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
+    const next = products.map(p => (p.id === id ? { ...p, ...updates } : p));
+    setProducts(next);
+    pushPatchToServer({ products: next });
+    soundService.playSuccess();
   };
 
   const deleteProduct = (id: string) => {
-    setProducts(prev => prev.filter(p => p.id !== id));
+    // Soft delete to protect past orders historical snapshots
+    const next = products.map(p => (p.id === id ? { ...p, isArchived: true, isVisible: false } : p));
+    setProducts(next);
+    pushPatchToServer({ products: next });
+    soundService.playSuccess();
+  };
+
+  const duplicateProduct = (id: string) => {
+    const original = products.find(p => p.id === id);
+    if (!original) return;
+    const copy: Product = {
+      ...original,
+      id: `prod-${Date.now()}`,
+      nameFr: `${original.nameFr} (Copie)`,
+      nameAr: original.nameAr ? `${original.nameAr} (نسخة)` : `${original.nameFr} (نسخة)`,
+      isArchived: false,
+      isVisible: true,
+      sortOrder: (original.sortOrder || 0) + 1,
+    };
+    const next = [...products, copy];
+    setProducts(next);
+    pushPatchToServer({ products: next });
+    soundService.playSuccess();
   };
 
   const toggleProductAvailability = (id: string) => {
-    setProducts(prev =>
-      prev.map(p => (p.id === id ? { ...p, isAvailable: !p.isAvailable } : p))
-    );
+    const next = products.map(p => (p.id === id ? { ...p, isAvailable: !p.isAvailable } : p));
+    setProducts(next);
+    pushPatchToServer({ products: next });
     soundService.playSuccess();
+  };
+
+  const reorderProducts = (_categoryId: string, orderedProductIds: string[]) => {
+    const next = products.map(p => {
+      const idx = orderedProductIds.indexOf(p.id);
+      if (idx !== -1) {
+        return { ...p, sortOrder: idx + 1 };
+      }
+      return p;
+    });
+    setProducts(next);
+    pushPatchToServer({ products: next });
+  };
+
+  // Categories methods
+  const addCategory = (catData: Omit<ProductCategoryItem, 'id' | 'order'>) => {
+    const newCat: ProductCategoryItem = {
+      ...catData,
+      id: `cat-${Date.now()}`,
+      order: categories.length + 1,
+    };
+    const next = [...categories, newCat];
+    setCategories(next);
+    pushPatchToServer({ categories: next });
+    soundService.playSuccess();
+  };
+
+  const updateCategory = (id: string, updates: Partial<ProductCategoryItem>) => {
+    const next = categories.map(c => (c.id === id ? { ...c, ...updates } : c));
+    setCategories(next);
+    pushPatchToServer({ categories: next });
+    soundService.playSuccess();
+  };
+
+  const deleteCategory = (id: string, moveProductsToCategoryId?: string) => {
+    const nextCats = categories.filter(c => c.id !== id);
+    setCategories(nextCats);
+
+    let nextProds = products;
+    if (moveProductsToCategoryId) {
+      nextProds = products.map(p => (p.category === id ? { ...p, category: moveProductsToCategoryId } : p));
+      setProducts(nextProds);
+    }
+    pushPatchToServer({ categories: nextCats, products: nextProds });
+    soundService.playSuccess();
+  };
+
+  const reorderCategories = (orderedIds: string[]) => {
+    const next = categories
+      .map(c => {
+        const idx = orderedIds.indexOf(c.id);
+        return idx !== -1 ? { ...c, order: idx + 1 } : c;
+      })
+      .sort((a, b) => a.order - b.order);
+    setCategories(next);
+    pushPatchToServer({ categories: next });
+  };
+
+  // Client Page Content methods
+  const updateClientPageContent = (updates: Partial<ClientPageContent>) => {
+    setClientPageContent(prev => ({ ...prev, ...updates }));
+  };
+
+  const publishClientPageContent = async (contentToPublish: ClientPageContent): Promise<boolean> => {
+    try {
+      const res = await authFetch('/api/client-page', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientPageContent: contentToPublish }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.clientPageContent) {
+          setClientPageContent(data.clientPageContent);
+        }
+        if (data.settings) {
+          setSettings(prev => ({ ...prev, ...data.settings }));
+        }
+        pushPatchToServer({ clientPageContent: data.clientPageContent || contentToPublish });
+        soundService.playSuccess();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  // Backup & Restore
+  const exportCatalogJson = (): string => {
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      restaurant: clientPageContent.restaurantNameFr || 'Sultan Ed-Djaj',
+      categories,
+      products: products.filter(p => !p.isArchived),
+      version: 1,
+    };
+    return JSON.stringify(exportData, null, 2);
+  };
+
+  const importCatalogJson = (jsonString: string): { success: boolean; message: string; count?: number } => {
+    try {
+      const parsed = JSON.parse(jsonString);
+      if (!parsed || !Array.isArray(parsed.products)) {
+        return { success: false, message: 'Fichier invalide : liste de produits manquante.' };
+      }
+      const importedProducts: Product[] = parsed.products.map((p: any, idx: number) => ({
+        id: p.id || `prod-${Date.now()}-${idx}`,
+        nameFr: p.nameFr || 'Sans nom',
+        nameAr: p.nameAr || p.nameFr || '',
+        descriptionFr: p.descriptionFr || '',
+        descriptionAr: p.descriptionAr || '',
+        price: typeof p.price === 'number' ? p.price : 0,
+        originalPrice: typeof p.originalPrice === 'number' ? p.originalPrice : undefined,
+        category: p.category || 'poulet',
+        imageUrl: p.imageUrl,
+        imageThumbUrl: p.imageThumbUrl,
+        isAvailable: p.isAvailable !== false,
+        isVisible: p.isVisible !== false,
+        isArchived: false,
+        isFeatured: Boolean(p.isFeatured),
+        badges: Array.isArray(p.badges) ? p.badges : [],
+        options: Array.isArray(p.options) ? p.options : [],
+        countsInChickenQuota: p.countsInChickenQuota !== false,
+        chickenQuotaPerItem: typeof p.chickenQuotaPerItem === 'number' ? p.chickenQuotaPerItem : 1,
+        sortOrder: typeof p.sortOrder === 'number' ? p.sortOrder : idx + 1,
+      }));
+
+      let nextCategories = categories;
+      if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+        nextCategories = parsed.categories.map((c: any, idx: number) => ({
+          id: c.id || `cat-${Date.now()}-${idx}`,
+          nameFr: c.nameFr || 'Catégorie',
+          nameAr: c.nameAr || c.nameFr || '',
+          order: typeof c.order === 'number' ? c.order : idx + 1,
+          icon: c.icon,
+        }));
+        setCategories(nextCategories);
+      }
+
+      setProducts(importedProducts);
+      pushPatchToServer({ products: importedProducts, categories: nextCategories });
+      soundService.playSuccess();
+      return {
+        success: true,
+        message: `${importedProducts.length} produits importés avec succès`,
+        count: importedProducts.length,
+      };
+    } catch (e: any) {
+      return { success: false, message: `Erreur d'import : ${e?.message || 'Format JSON invalide'}` };
+    }
   };
 
   const updateSettings = (updates: Partial<StoreSettings>) => {
@@ -1291,9 +2654,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const resetAllSeedData = () => {
     localStorage.clear();
     const generated = generateHistoricalData();
+    const migrated = migrateOrdersAndDays(
+      generated.orders,
+      undefined,
+      INITIAL_SETTINGS,
+      INITIAL_COMPOSITIONS,
+      generated.stockMovements
+    );
     setProducts(INITIAL_PRODUCTS);
     setCustomers(INITIAL_CUSTOMERS);
-    setOrders(generated.orders);
+    setOrders(migrated.orders);
+    setDays(migrated.days);
     setSettings(INITIAL_SETTINGS);
     setStockItems(INITIAL_STOCK_ITEMS);
     setCompositions(INITIAL_COMPOSITIONS);
@@ -1304,6 +2675,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCart([]);
     setIsRevenueUnlocked(false);
     localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
+    pushPatchToServer({}, true);
     soundService.playSuccess();
   };
 
@@ -1325,6 +2697,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     commune: string;
     address: string;
     landmark?: string;
+    mapUrl?: string;
+    latitude?: number;
+    longitude?: number;
   }) => {
     const existing = customers.find(c => c.phone === data.phone);
     if (existing) {
@@ -1334,6 +2709,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         commune: data.commune || existing.commune,
         address: data.address || existing.address,
         landmark: data.landmark || existing.landmark,
+        mapUrl: data.mapUrl !== undefined ? data.mapUrl : existing.mapUrl,
+        latitude: data.latitude !== undefined ? data.latitude : existing.latitude,
+        longitude: data.longitude !== undefined ? data.longitude : existing.longitude,
       };
       setCustomers(prev => prev.map(c => (c.id === existing.id ? updated : c)));
       setCurrentCustomer(updated);
@@ -1348,6 +2726,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       commune: data.commune,
       address: data.address,
       landmark: data.landmark,
+      mapUrl: data.mapUrl,
+      latitude: data.latitude,
+      longitude: data.longitude,
       orderCount: 0,
       totalSpent: 0,
       createdAt: new Date().toISOString(),
@@ -1370,9 +2751,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setLanguage,
         userRole,
         setUserRole,
+        authenticatedRole,
+        setAuthenticatedRole,
         products,
         customers,
         orders,
+        days: computedDays,
+        currentDay,
+        unclosedPastDay,
+        lastClosedDayQuota,
+        openDay,
+        closeDay,
         settings,
         isStoreActuallyOpen,
         stockItems,
@@ -1410,30 +2799,56 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setClientTab,
         clientActiveOrder,
         setClientActiveOrder,
+        clientSimulatorMode,
+        setClientSimulatorMode,
         backOfficeTab,
         setBackOfficeTab,
         backOfficeOrdersView,
         setBackOfficeOrdersView,
         unreadAlertCount,
         clearNewOrderAlert,
+        isMobileSidebarOpen,
+        setIsMobileSidebarOpen,
+        toggleMobileSidebar,
         cancelModalOrder,
         setCancelModalOrder,
+        dailyChickenQuota,
+        dailyChickenInitial,
+        dailyChickenRemaining,
+        dailyChickenSold,
+        setDailyChickenQuota,
+        setTodayChickenCount,
+        resetTodayChickenBatch,
         placeOrder,
         addManualOrder,
         advanceOrderStatus,
         updateOrderStatus: advanceOrderStatus,
         cancelOrder,
         cancelOrderWithStockChoice,
+        markOrderSentToWhatsApp,
         addProduct,
         updateProduct,
         deleteProduct,
+        duplicateProduct,
         toggleProductAvailability,
+        reorderProducts,
+        categories,
+        addCategory,
+        updateCategory,
+        deleteCategory,
+        reorderCategories,
+        clientPageContent,
+        updateClientPageContent,
+        publishClientPageContent,
+        exportCatalogJson,
+        importCatalogJson,
         updateSettings,
         resetAllSeedData,
         resetToSeedData: resetAllSeedData,
         reorderPastOrder,
         registerOrLoginCustomer,
         logoutCustomer,
+        refreshSync: refreshRemoteState,
       }}
     >
       {children}

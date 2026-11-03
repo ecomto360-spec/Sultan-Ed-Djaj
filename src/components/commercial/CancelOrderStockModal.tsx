@@ -33,10 +33,10 @@ export const CancelOrderStockModal: React.FC<CancelOrderStockModalProps> = ({ or
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fadeIn overflow-y-auto">
+      <div className="bg-[#18181c] border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/80 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-400 flex items-center justify-center border border-red-500/20">
               <AlertTriangle className="w-5 h-5" />
@@ -61,7 +61,7 @@ export const CancelOrderStockModal: React.FC<CancelOrderStockModalProps> = ({ or
         </div>
 
         {/* Content */}
-        <div className="p-4 space-y-4">
+        <div className="p-3.5 sm:p-4 space-y-4 overflow-y-auto flex-1">
           {/* Reason Selection */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-zinc-300">
@@ -116,7 +116,7 @@ export const CancelOrderStockModal: React.FC<CancelOrderStockModalProps> = ({ or
                 <div className="flex-1">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>{t.cancelModalRestoreStock}</span>
+                    <span>{t.returnToStockBtn}</span>
                   </div>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
                     {isArabic
@@ -145,7 +145,7 @@ export const CancelOrderStockModal: React.FC<CancelOrderStockModalProps> = ({ or
                 <div className="flex-1">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-red-400">
                     <Flame className="w-3.5 h-3.5" />
-                    <span>{t.cancelModalDeclareLoss}</span>
+                    <span>{t.declareAsLossBtn}</span>
                   </div>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
                     {isArabic

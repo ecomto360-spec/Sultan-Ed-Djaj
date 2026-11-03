@@ -16,6 +16,7 @@ import {
 import { StockItemEditModal } from './StockItemEditModal';
 import { QuickRestockModal } from './QuickRestockModal';
 import { DeclareWasteModal } from './DeclareWasteModal';
+import { DailyChickenModal } from '../DailyChickenModal';
 import {
   Package,
   AlertTriangle,
@@ -35,6 +36,9 @@ import {
   Edit2,
   Trash2,
   Filter,
+  LayoutGrid,
+  Table as TableIcon,
+  Minus,
 } from 'lucide-react';
 
 type StockSubTab = 'articles' | 'movements' | 'purchases' | 'inventory';
@@ -51,19 +55,25 @@ export const StockModule: React.FC = () => {
     reportLowStock,
     applyInventoryDiscrepancies,
     receivePurchaseGroup,
+    addStockMovement,
+    dailyChickenInitial,
+    dailyChickenRemaining,
+    dailyChickenSold,
   } = useApp();
 
   const t = TRANSLATIONS[language];
   const isArabic = language === 'ar';
   const isCook = userRole === 'cuisinier';
 
-  // Sub-tabs
+  // Sub-tabs & View Mode (Cards vs Table)
   const [activeSubTab, setActiveSubTab] = useState<StockSubTab>('articles');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
 
   // Modals
   const [editingItem, setEditingItem] = useState<StockItem | null | undefined>(undefined);
   const [restockItem, setRestockItem] = useState<StockItem | null | undefined>(undefined);
   const [wasteItem, setWasteItem] = useState<StockItem | null | undefined>(undefined);
+  const [showDailyChickenModal, setShowDailyChickenModal] = useState<boolean>(false);
 
   // Articles filters
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -160,9 +170,9 @@ export const StockModule: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#0c0c0e]">
       {/* Chicken Autonomy Headline Banner */}
-      <div className="p-4 border-b border-zinc-800/80 bg-zinc-900/40">
+      <div className="p-3 sm:p-4 border-b border-zinc-800/80 bg-zinc-900/40">
         <div
-          className={`p-4 rounded-2xl border flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition ${
+          className={`p-3.5 sm:p-4 rounded-2xl border flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 transition ${
             chickenAutonomy.statusColor === 'red'
               ? 'bg-red-950/20 border-red-500/40 text-red-300'
               : chickenAutonomy.statusColor === 'orange'
@@ -170,9 +180,9 @@ export const StockModule: React.FC = () => {
               : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
           }`}
         >
-          <div className="flex items-center gap-3.5">
+          <div className="flex items-center gap-3">
             <div
-              className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-2xl border ${
+              className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center font-black text-2xl border shrink-0 ${
                 chickenAutonomy.statusColor === 'red'
                   ? 'bg-red-500/20 border-red-500/40 text-red-400 animate-pulse'
                   : chickenAutonomy.statusColor === 'orange'
@@ -182,10 +192,10 @@ export const StockModule: React.FC = () => {
             >
               🍗
             </div>
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                  {t.stockChickenAutonomy}
+                  {t.chickenAutonomyTitle}
                 </span>
                 <span
                   className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase ${
@@ -197,84 +207,91 @@ export const StockModule: React.FC = () => {
                   }`}
                 >
                   {chickenAutonomy.statusColor === 'red'
-                    ? t.stockStatusCritical
+                    ? t.statusCritical
                     : chickenAutonomy.statusColor === 'orange'
-                    ? t.stockStatusAlert
-                    : t.stockStatusOk}
+                    ? t.statusLow
+                    : t.statusOk}
                 </span>
               </div>
-              <div className="text-lg font-black text-white flex items-baseline gap-2 mt-0.5">
+              <div className="text-base sm:text-lg font-black text-white flex flex-wrap items-baseline gap-1.5 sm:gap-2 mt-0.5">
                 <span>
-                  ≈ {chickenAutonomy.chickenPieces} {t.stockChickenPiecesRemaining}
+                  {dailyChickenRemaining} / {dailyChickenInitial} {isArabic ? 'دجاجة متبقية لليوم' : 'poulets restants aujourd\'hui'}
                 </span>
-                <span className="text-sm font-semibold text-zinc-400">
-                  (≈ {chickenAutonomy.hoursRemaining}h {chickenAutonomy.minutesRemaining}min {t.stockChickenHoursRemaining})
+                <span className="text-xs sm:text-sm font-semibold text-zinc-400">
+                  (≈ {chickenAutonomy.hoursRemaining}h {chickenAutonomy.minutesRemaining}min {isArabic ? 'استقلالية' : "d'autonomie"})
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-end md:self-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full md:w-auto mt-1 md:mt-0">
             <button
-              onClick={() => setRestockItem(stockItems.find(s => s.id === 'stk-poulet') || null)}
-              className="px-3.5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-md shadow-orange-950/40 active:scale-95"
+              onClick={() => setShowDailyChickenModal(true)}
+              className="px-3 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-md shadow-orange-950/40 active:scale-95"
             >
-              <PlusCircle className="w-4 h-4" />
-              <span>{t.stockQuickRestock}</span>
+              <span className="text-sm">🍗</span>
+              <span className="truncate">{isArabic ? 'تحديد دجاج اليوم (100, 120, 150...)' : 'Quota du jour (100, 120...)'}</span>
             </button>
             <button
-              onClick={() => setWasteItem(stockItems.find(s => s.id === 'stk-poulet') || null)}
-              className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-red-400 hover:text-red-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
+              onClick={() => setRestockItem(stockItems.find(s => s.id === 'stock-1' || s.id === 'stk-poulet' || s.nameFr.toLowerCase().includes('poulet')) || null)}
+              className="px-3 py-2 rounded-xl bg-emerald-700/80 hover:bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 border border-emerald-600/40"
             >
-              <Flame className="w-4 h-4" />
-              <span>{t.stockDeclareLoss}</span>
+              <PlusCircle className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t.quickRestockBtn}</span>
+            </button>
+            <button
+              onClick={() => setWasteItem(stockItems.find(s => s.id === 'stock-1' || s.id === 'stk-poulet' || s.nameFr.toLowerCase().includes('poulet')) || null)}
+              className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-red-400 hover:text-red-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 border border-zinc-700/60"
+            >
+              <Flame className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t.declareLossBtn}</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Sub-Navigation Tabs */}
-      <div className="px-5 pt-3 border-b border-zinc-800 flex items-center justify-between bg-[#111114]">
-        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+      {/* Sub-Navigation Tabs: 2x2 grid on mobile, horizontal row on tablet/desktop */}
+      <div className="px-3 sm:px-5 pt-3 border-b border-zinc-800 bg-[#111114]">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2 pb-2.5 w-full">
           <button
             onClick={() => setActiveSubTab('articles')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
               activeSubTab === 'articles'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                : 'bg-zinc-900/70 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
             }`}
           >
-            <Package className="w-4 h-4" />
-            <span>{t.stockTabArticles}</span>
-            <span className="px-2 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300">
+            <Package className="w-4 h-4 shrink-0" />
+            <span className="truncate">{t.stockSubArticles}</span>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-300 font-mono">
               {stockItems.length}
             </span>
           </button>
 
           <button
             onClick={() => setActiveSubTab('movements')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
               activeSubTab === 'movements'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                : 'bg-zinc-900/70 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
             }`}
           >
-            <History className="w-4 h-4" />
-            <span>{t.stockTabMovements}</span>
+            <History className="w-4 h-4 shrink-0" />
+            <span className="truncate">{t.stockSubMovements}</span>
           </button>
 
           <button
             onClick={() => setActiveSubTab('purchases')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
               activeSubTab === 'purchases'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                : 'bg-zinc-900/70 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
             }`}
           >
-            <ShoppingCart className="w-4 h-4" />
-            <span>{t.stockTabPurchases}</span>
+            <ShoppingCart className="w-4 h-4 shrink-0" />
+            <span className="truncate">{t.stockSubPurchases}</span>
             {purchaseGroups.length > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-extrabold">
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-extrabold font-mono">
                 {purchaseGroups.reduce((acc, g) => acc + g.items.length, 0)}
               </span>
             )}
@@ -282,45 +299,34 @@ export const StockModule: React.FC = () => {
 
           <button
             onClick={() => setActiveSubTab('inventory')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
               activeSubTab === 'inventory'
-                ? 'bg-orange-600/15 text-orange-400 border border-orange-500/30'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                ? 'bg-orange-600/20 text-orange-400 border border-orange-500/40 shadow-sm'
+                : 'bg-zinc-900/70 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-zinc-800/60'
             }`}
           >
-            <ClipboardList className="w-4 h-4" />
-            <span>{t.stockTabInventory}</span>
+            <ClipboardList className="w-4 h-4 shrink-0" />
+            <span className="truncate">{t.stockSubInventory}</span>
           </button>
         </div>
-
-        {/* Action Button: Add Item (Gérant) or Quick Declare */}
-        {!isCook && activeSubTab === 'articles' && (
-          <button
-            onClick={() => setEditingItem(null)}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition shadow-md shadow-orange-950/40"
-          >
-            <Plus className="w-4 h-4" />
-            <span>{t.stockAddItem}</span>
-          </button>
-        )}
       </div>
 
       {/* Main Tab Content */}
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5">
         {/* TAB 1: ARTICLES */}
         {activeSubTab === 'articles' && (
           <div className="space-y-4">
-            {/* Filter Bar */}
-            <div className="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+            {/* Filter Bar: Category chips wrap onto multiple lines cleanly */}
+            <div className="flex flex-col gap-3">
               {/* Category Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1">
+              <div className="flex flex-wrap items-center gap-1.5 max-w-full">
                 {categoriesList.map(cat => (
                   <button
                     key={cat.id}
                     onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
                       selectedCategory === cat.id
-                        ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                        ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40 shadow-sm'
                         : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
                     }`}
                   >
@@ -329,32 +335,233 @@ export const StockModule: React.FC = () => {
                 ))}
               </div>
 
-              {/* Search Bar */}
-              <div className="relative w-full md:w-64">
-                <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder={isArabic ? 'بحث عن مادة...' : 'Rechercher un article...'}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
-                />
+              {/* Search Bar & View Mode Switcher */}
+              <div className="flex items-center gap-2 w-full">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder={isArabic ? 'بحث عن مادة...' : 'Rechercher un article...'}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                {/* View Mode Toggle: Cards vs Table */}
+                <div className="flex items-center bg-zinc-900 p-0.5 rounded-xl border border-zinc-800 shrink-0">
+                  <button
+                    onClick={() => setViewMode('cards')}
+                    className={`p-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                      viewMode === 'cards'
+                        ? 'bg-orange-600 text-white shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                    title={isArabic ? 'عرض بطاقات' : 'Vue Cartes'}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span className="hidden md:inline">{isArabic ? 'بطاقات' : 'Cartes'}</span>
+                  </button>
+                  <button
+                    onClick={() => setViewMode('table')}
+                    className={`p-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                      viewMode === 'table'
+                        ? 'bg-orange-600 text-white shadow-sm'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                    title={isArabic ? 'عرض جدول' : 'Vue Tableau'}
+                  >
+                    <TableIcon className="w-3.5 h-3.5" />
+                    <span className="hidden md:inline">{isArabic ? 'جدول' : 'Tableau'}</span>
+                  </button>
+                </div>
+
+                {!isCook && (
+                  <button
+                    onClick={() => setEditingItem(null)}
+                    className="flex items-center justify-center p-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white transition shrink-0 shadow-md shadow-orange-950/40 active:scale-95"
+                    title={t.addStockItemBtn}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Articles Table */}
-            <div className="bg-[#141418] border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+            {/* View Mode: Cards View */}
+            {viewMode === 'cards' ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+                {filteredArticles.map(item => {
+                  const isCritical = item.currentStock <= item.criticalThreshold;
+                  const isAlert = !isCritical && item.currentStock <= item.alertThreshold;
+                  const ideal = item.idealStock || item.alertThreshold * 2 || 10;
+                  const progress = Math.min(100, Math.round((item.currentStock / ideal) * 100));
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`bg-[#141418] border rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-lg transition ${
+                        isCritical
+                          ? 'border-red-500/50 shadow-red-950/20'
+                          : isAlert
+                          ? 'border-amber-500/50 shadow-amber-950/20'
+                          : 'border-zinc-800 hover:border-zinc-700'
+                      }`}
+                    >
+                      {/* Top info */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800">
+                            {item.category} • {item.location || 'Cuisine'}
+                          </span>
+
+                          {/* Status Badge */}
+                          {isCritical ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>{t.statusCritical}</span>
+                            </span>
+                          ) : isAlert ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>{t.statusLow}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>{t.statusOk}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 className="font-bold text-white text-sm">
+                          {isArabic ? item.nameAr : item.nameFr}
+                        </h3>
+
+                        {/* Stock Number */}
+                        <div className="flex items-baseline gap-2 pt-1">
+                          <span
+                            className={`text-2xl font-black font-mono ${
+                              isCritical ? 'text-red-400' : isAlert ? 'text-amber-400' : 'text-white'
+                            }`}
+                          >
+                            {item.currentStock}
+                          </span>
+                          <span className="text-xs text-zinc-400 font-semibold">{item.unit}</span>
+                          <span className="text-[11px] text-zinc-500 font-mono ml-auto">
+                            (Seuil: {item.alertThreshold})
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Stock Progress Bar */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] text-zinc-400">
+                          <span>{isArabic ? 'المستوى' : 'Niveau de réappro'}</span>
+                          <span>{progress}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              isCritical ? 'bg-red-500' : isAlert ? 'bg-amber-500' : 'bg-emerald-500'
+                            }`}
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Unit Cost & Supplier info for Gerant */}
+                      {!isCook && (
+                        <div className="text-[11px] text-zinc-400 flex items-center justify-between pt-1 border-t border-zinc-800/60 font-mono">
+                          <span>Coût : <strong className="text-zinc-200">{item.unitCostDA} DA</strong></span>
+                          {item.supplierName && (
+                            <span className="text-zinc-400 truncate max-w-[120px]">{item.supplierName}</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Quick Stepper & Actions */}
+                      <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-1.5">
+                        {/* Stepper + / - 1 */}
+                        <div className="flex items-center gap-1 bg-zinc-900 rounded-xl p-0.5 border border-zinc-800">
+                          <button
+                            onClick={() => {
+                              if (item.currentStock > 0) {
+                                addStockMovement({
+                                  stockItemId: item.id,
+                                  type: 'waste',
+                                  quantity: -1,
+                                  reason: isArabic ? 'إنقاص سريع -1' : 'Décrément rapide -1',
+                                  authorRole: userRole,
+                                });
+                              }
+                            }}
+                            title="-1"
+                            className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="text-[10px] font-mono px-1 font-bold text-zinc-400">±1</span>
+                          <button
+                            onClick={() => {
+                              addStockMovement({
+                                stockItemId: item.id,
+                                type: 'in',
+                                quantity: 1,
+                                reason: isArabic ? 'زيادة سريعة +1' : 'Incrément rapide +1',
+                                authorRole: userRole,
+                              });
+                            }}
+                            title="+1"
+                            className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        {/* Quick Action buttons */}
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setRestockItem(item)}
+                            className="px-2 py-1 rounded-lg bg-orange-600/15 hover:bg-orange-600/30 text-orange-400 text-[11px] font-bold border border-orange-500/30 transition"
+                          >
+                            {isArabic ? 'دخول' : 'Entrée'}
+                          </button>
+                          <button
+                            onClick={() => setWasteItem(item)}
+                            className="px-2 py-1 rounded-lg bg-red-950/40 hover:bg-red-950/60 text-red-400 text-[11px] font-bold border border-red-500/30 transition"
+                          >
+                            {isArabic ? 'فقد' : 'Perte'}
+                          </button>
+                          {!isCook && (
+                            <button
+                              onClick={() => setEditingItem(item)}
+                              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition"
+                              title={isArabic ? 'تعديل' : 'Modifier'}
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* View Mode: Articles Table */
+              <div className="bg-[#141418] border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/60 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                      <th className="py-3 px-4">{t.stockItemName}</th>
-                      <th className="py-3 px-4">{t.stockCurrent}</th>
-                      <th className="py-3 px-4">{t.stockAlert} / {t.stockCritical}</th>
-                      <th className="py-3 px-4">{t.stockAutonomyRemaining}</th>
-                      {!isCook && <th className="py-3 px-4">{t.stockUnitCost}</th>}
-                      {!isCook && <th className="py-3 px-4">{isArabic ? 'المورّد' : 'Fournisseur'}</th>}
-                      <th className="py-3 px-4 text-right">{isArabic ? 'إجراءات' : 'Actions'}</th>
+                      <th className="py-3 px-4">{t.colStockItem}</th>
+                      <th className="py-3 px-4">{t.colCurrentStock}</th>
+                      <th className="py-3 px-4">{t.colAlertThreshold}</th>
+                      <th className="py-3 px-4">{t.colAutonomy}</th>
+                      {!isCook && <th className="py-3 px-4">{t.colUnitCost}</th>}
+                      {!isCook && <th className="py-3 px-4">{t.colSupplier}</th>}
+                      <th className="py-3 px-4 text-right">{t.colActions}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 text-xs">
@@ -417,17 +624,17 @@ export const StockModule: React.FC = () => {
                             {isCritical ? (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
                                 <AlertTriangle className="w-3 h-3" />
-                                <span>{t.stockStatusCritical}</span>
+                                <span>{t.statusCritical}</span>
                               </span>
                             ) : isAlert ? (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30">
                                 <AlertTriangle className="w-3 h-3" />
-                                <span>{t.stockStatusAlert}</span>
+                                <span>{t.statusLow}</span>
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                 <CheckCircle2 className="w-3 h-3" />
-                                <span>{t.stockStatusOk}</span>
+                                <span>{t.statusOk}</span>
                               </span>
                             )}
                           </td>
@@ -459,7 +666,7 @@ export const StockModule: React.FC = () => {
                               {/* Quick restock button */}
                               <button
                                 onClick={() => setRestockItem(item)}
-                                title={t.stockQuickRestock}
+                                title={t.quickRestockBtn}
                                 className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition"
                               >
                                 <PlusCircle className="w-4 h-4" />
@@ -468,7 +675,7 @@ export const StockModule: React.FC = () => {
                               {/* Declare waste */}
                               <button
                                 onClick={() => setWasteItem(item)}
-                                title={t.stockDeclareLoss}
+                                title={t.declareLossBtn}
                                 className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition"
                               >
                                 <Flame className="w-4 h-4" />
@@ -478,11 +685,11 @@ export const StockModule: React.FC = () => {
                               {isCook && (
                                 <button
                                   onClick={() => reportLowStock(item.id)}
-                                  title={t.stockSignalLowStock}
+                                  title={t.reportLowStockBtn}
                                   className="px-2 py-1 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-[11px] font-bold flex items-center gap-1 transition"
                                 >
                                   <BellRing className="w-3.5 h-3.5" />
-                                  <span>{t.stockSignalLowStock}</span>
+                                  <span>{t.reportLowStockBtn}</span>
                                 </button>
                               )}
 
@@ -518,37 +725,37 @@ export const StockModule: React.FC = () => {
                 </table>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+      )}
 
         {/* TAB 2: MOVEMENTS JOURNAL */}
         {activeSubTab === 'movements' && (
           <div className="space-y-4">
             {/* Filters */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#141418] p-3 rounded-2xl border border-zinc-800">
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-zinc-400" />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 bg-[#141418] p-3 rounded-2xl border border-zinc-800">
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
                 {/* Movement Type Filter */}
                 <select
                   value={movTypeFilter}
                   onChange={e => setMovTypeFilter(e.target.value)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
+                  className="w-full sm:w-auto bg-zinc-900 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
                 >
-                  <option value="all">{isArabic ? 'جميع أنواع الحركات' : 'Tous les types'}</option>
-                  <option value="in">{t.stockMovIn}</option>
-                  <option value="out_auto">{t.stockMovOutAuto}</option>
-                  <option value="out_manual">{t.stockMovOutManual}</option>
-                  <option value="waste">{t.stockMovWaste}</option>
-                  <option value="adjustment">{t.stockMovAdjustment}</option>
+                  <option value="all">{isArabic ? 'كل الحركات' : 'Tous les types'}</option>
+                  <option value="in">{t.movementTypeIn || 'Entrée (+)'}</option>
+                  <option value="out_auto">{t.movementTypeOutAuto || 'Sortie auto'}</option>
+                  <option value="out_manual">{isArabic ? 'إنقاص يدوي' : 'Sortie manuelle'}</option>
+                  <option value="waste">{t.movementTypeWaste || 'Perte / Casse'}</option>
+                  <option value="adjustment">{t.movementTypeAdjustment || 'Ajustement'}</option>
                 </select>
 
                 {/* Author Filter */}
                 <select
                   value={movAuthorFilter}
                   onChange={e => setMovAuthorFilter(e.target.value)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
+                  className="w-full sm:w-auto bg-zinc-900 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500"
                 >
-                  <option value="all">{isArabic ? 'جميع المستخدمين' : 'Tous les auteurs'}</option>
+                  <option value="all">{isArabic ? 'كل المستخدمين' : 'Tous les auteurs'}</option>
                   <option value="gerant">{t.roleGerant}</option>
                   <option value="cuisinier">{t.roleCuisinier}</option>
                   <option value="caissier">{t.roleCaissier}</option>
@@ -556,7 +763,7 @@ export const StockModule: React.FC = () => {
               </div>
 
               {/* Search */}
-              <div className="relative w-64">
+              <div className="relative w-full sm:w-64">
                 <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-2.5" />
                 <input
                   type="text"
@@ -571,16 +778,16 @@ export const StockModule: React.FC = () => {
             {/* Movements Table */}
             <div className="bg-[#141418] border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full min-w-[700px] text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/60 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                      <th className="py-3 px-4">{t.stockMovementDate}</th>
-                      <th className="py-3 px-4">{t.stockItemName}</th>
-                      <th className="py-3 px-4">{t.stockMovementType}</th>
-                      <th className="py-3 px-4">{t.stockMovementQty}</th>
-                      <th className="py-3 px-4">{t.stockMovementBalance}</th>
-                      <th className="py-3 px-4">{t.stockMovementAuthor}</th>
-                      <th className="py-3 px-4">{t.stockMovementReason}</th>
+                      <th className="py-3 px-4">{t.colMovementDate}</th>
+                      <th className="py-3 px-4">{isArabic ? 'المادة' : 'Article'}</th>
+                      <th className="py-3 px-4">{t.colMovementType}</th>
+                      <th className="py-3 px-4">{t.colMovementQty}</th>
+                      <th className="py-3 px-4">{t.colMovementBalance}</th>
+                      <th className="py-3 px-4">{t.colMovementAuthor}</th>
+                      <th className="py-3 px-4">{t.colMovementReason}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 text-xs">
@@ -626,14 +833,14 @@ export const StockModule: React.FC = () => {
                                 }`}
                               >
                                 {mov.type === 'in'
-                                  ? t.stockMovIn
+                                  ? (t.movementTypeIn || 'Entrée (+)')
                                   : mov.type === 'waste'
-                                  ? t.stockMovWaste
+                                  ? (t.movementTypeWaste || 'Perte / Casse')
                                   : mov.type === 'out_auto'
-                                  ? t.stockMovOutAuto
+                                  ? (t.movementTypeOutAuto || 'Sortie auto')
                                   : mov.type === 'adjustment'
-                                  ? t.stockMovAdjustment
-                                  : t.stockMovOutManual}
+                                  ? (t.movementTypeAdjustment || 'Ajustement')
+                                  : (isArabic ? 'إنقاص يدوي' : 'Sortie manuelle')}
                               </span>
                             </td>
 
@@ -682,7 +889,7 @@ export const StockModule: React.FC = () => {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-white">{t.stockShoppingListTitle}</h3>
+                <h3 className="text-sm font-bold text-white">{t.shoppingListTitle}</h3>
                 <p className="text-xs text-zinc-400">
                   {isArabic
                     ? 'توليد تلقائي لقوائم الشراء حسب المواد التي بلغت عتبة التنبيه'
@@ -695,7 +902,7 @@ export const StockModule: React.FC = () => {
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold transition"
               >
                 <Printer className="w-4 h-4" />
-                <span>{t.stockPrintPurchaseOrder}</span>
+                <span>{t.printListBtn}</span>
               </button>
             </div>
 
@@ -764,7 +971,7 @@ export const StockModule: React.FC = () => {
                                 </span>
                                 {!isCook && (
                                   <div className="text-[10px] text-zinc-400 font-mono">
-                                    {pItem.estimatedCostDA.toLocaleString()} DA
+                                    {(pItem.estimatedCostDA ?? pItem.estimatedCost ?? 0).toLocaleString()} DA
                                   </div>
                                 )}
                               </div>
@@ -783,7 +990,7 @@ export const StockModule: React.FC = () => {
                           <span>
                             {isCopied
                               ? isArabic ? 'تم النسخ !' : 'Copié !'
-                              : t.stockWhatsAppOrder}
+                              : t.copyWhatsAppBtn}
                           </span>
                         </button>
 
@@ -791,7 +998,7 @@ export const StockModule: React.FC = () => {
                           onClick={() => receivePurchaseGroup(group)}
                           className="px-3 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition shadow-md shadow-orange-950/40"
                         >
-                          {t.stockReceiveOrder}
+                          {t.receiveAllGroupBtn}
                         </button>
                       </div>
                     </div>
@@ -807,7 +1014,7 @@ export const StockModule: React.FC = () => {
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-white">{t.stockInventoryCountTitle}</h3>
+                <h3 className="text-sm font-bold text-white">{t.inventoryTitle}</h3>
                 <p className="text-xs text-zinc-400">
                   {isArabic
                     ? 'جرد المخزون الفعلي (بداية أو نهاية الخدمة) وحساب الفروقات آلياً'
@@ -827,7 +1034,7 @@ export const StockModule: React.FC = () => {
                   className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition shadow-lg shadow-orange-950/40 flex items-center gap-1.5 active:scale-95"
                 >
                   <Check className="w-4 h-4" />
-                  <span>{t.stockInventoryValidate}</span>
+                  <span>{t.applyInventoryAdjustmentsBtn}</span>
                 </button>
               </div>
             </div>
@@ -838,16 +1045,17 @@ export const StockModule: React.FC = () => {
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/60 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                      <th className="py-3 px-4">{t.stockItemName}</th>
-                      <th className="py-3 px-4">{t.stockInventoryTheoretical}</th>
-                      <th className="py-3 px-4 w-40">{t.stockInventoryCounted}</th>
-                      <th className="py-3 px-4">{t.stockInventoryDifference}</th>
-                      {!isCook && <th className="py-3 px-4">{t.stockInventoryCostDiff}</th>}
+                      <th className="py-3 px-4">{isArabic ? 'المادة' : 'Article'}</th>
+                      <th className="py-3 px-4">{t.theoreticalStockCol}</th>
+                      <th className="py-3 px-4 w-40">{t.countedStockCol}</th>
+                      <th className="py-3 px-4">{t.differenceCol}</th>
+                      {!isCook && <th className="py-3 px-4">{t.costDifferenceCol}</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 text-xs">
                     {inventoryDiscrepancies.map(disc => {
                       const hasDiscrepancy = disc.difference !== 0;
+                      const costDiff = disc.costDifferenceDA ?? disc.totalCostDifference ?? 0;
 
                       return (
                         <tr
@@ -856,7 +1064,7 @@ export const StockModule: React.FC = () => {
                         >
                           {/* Name */}
                           <td className="py-3.5 px-4 font-bold text-white">
-                            {isArabic ? disc.nameAr : disc.nameFr}
+                            {isArabic ? (disc.nameAr || disc.stockItemName || '') : (disc.nameFr || disc.stockItemName || '')}
                           </td>
 
                           {/* Theoretical */}
@@ -910,14 +1118,14 @@ export const StockModule: React.FC = () => {
                               {hasDiscrepancy ? (
                                 <span
                                   className={
-                                    disc.costDifferenceDA > 0
+                                    costDiff > 0
                                       ? 'text-emerald-400 font-bold'
                                       : 'text-red-400 font-bold'
                                   }
                                 >
-                                  {disc.costDifferenceDA > 0
-                                    ? `+${disc.costDifferenceDA}`
-                                    : disc.costDifferenceDA}{' '}
+                                  {costDiff > 0
+                                    ? `+${costDiff}`
+                                    : costDiff}{' '}
                                   DA
                                 </span>
                               ) : (
@@ -955,6 +1163,12 @@ export const StockModule: React.FC = () => {
         <DeclareWasteModal
           stockItem={wasteItem}
           onClose={() => setWasteItem(undefined)}
+        />
+      )}
+
+      {showDailyChickenModal && (
+        <DailyChickenModal
+          onClose={() => setShowDailyChickenModal(false)}
         />
       )}
     </div>

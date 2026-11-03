@@ -48,8 +48,8 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({ order, onClo
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl p-5 space-y-4">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-700 w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl p-4 sm:p-5 space-y-4 max-h-[92dvh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-red-400">
             <AlertCircle className="w-5 h-5" />

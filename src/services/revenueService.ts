@@ -250,10 +250,12 @@ export const getDailyRevenueChartData = (
   );
 
   delivered.forEach(o => {
-    const key = o.createdAt.split('T')[0];
-    if (result[key]) {
-      result[key].ca += o.total;
-      result[key].commandes += 1;
+    if (Boolean(o.createdAt) && typeof o.createdAt === 'string') {
+      const key = o.createdAt.split('T')[0];
+      if (result[key]) {
+        result[key].ca += o.total;
+        result[key].commandes += 1;
+      }
     }
   });
 
@@ -608,7 +610,7 @@ export const filterExpensesByPeriod = (
 export const formatDailyRevenueChartData = (orders: Order[], expenses: Expense[]) => {
   const map: Record<string, { date: string; recette: number; depenses: number }> = {};
   orders.forEach(o => {
-    if (o.status === 'delivered') {
+    if (o.status === 'delivered' && Boolean(o.createdAt) && typeof o.createdAt === 'string') {
       const d = o.createdAt.split('T')[0];
       if (!map[d]) map[d] = { date: d, recette: 0, depenses: 0 };
       map[d].recette += o.total;

@@ -2,13 +2,67 @@ import {
   Product,
   Customer,
   Order,
+  StatusLog,
   StoreSettings,
   StockItem,
   ProductComposition,
   StockMovement,
   Expense,
   CashClosing,
+  ProductCategoryItem,
+  ClientPageContent,
 } from '../types';
+
+export const INITIAL_CATEGORIES: ProductCategoryItem[] = [
+  { id: 'poulets', nameFr: 'Poulets', nameAr: 'دجاج', order: 1 },
+  { id: 'accompagnements', nameFr: 'Accompagnements', nameAr: 'مقبلات', order: 2 },
+  { id: 'pains', nameFr: 'Pains', nameAr: 'خبز', order: 3 },
+  { id: 'boissons', nameFr: 'Boissons', nameAr: 'مشروبات', order: 4 },
+];
+
+export const INITIAL_CLIENT_PAGE_CONTENT: ClientPageContent = {
+  restaurantNameFr: 'Sultan Ed-Djaj',
+  restaurantNameAr: 'سلطان الدجاج',
+  taglineFr: 'Spécialité Poulet Braisé & Rôti au feu de bois',
+  taglineAr: 'دجاج محمر ومشوي على الجمر · بئر خادم الجزائر',
+  logoUrl: '',
+  banner: {
+    enabled: false,
+    textFr: '🔥 Dégustez nos poulets braisés au charbon naturel – Livraison rapide 24h/24 !',
+    textAr: '🔥 استمتعوا بأشهى دجاج مشوي على الجمر الطبيعي – توصيل سريع 24/24 ساعة !',
+    badgeTextFr: 'Spécialité du Chef',
+    badgeTextAr: 'عرض خاص',
+  },
+  contact: {
+    address: 'Les Vergers, Birkhadem, Alger',
+    phone: '+213 771 01 20 33',
+    hours: 'Ouvert 24h / 24 – 7j / 7',
+    whatsappUrl: 'https://wa.me/213771012033',
+    googleMapsUrl: 'https://maps.google.com/?q=Birkhadem+Alger',
+    facebookUrl: 'https://facebook.com',
+    instagramUrl: 'https://instagram.com',
+  },
+  service: {
+    deliveryFee: 200,
+    prepTimeMinutes: 25,
+    announcementNotice: '',
+    showAnnouncement: false,
+  },
+  legalPages: {
+    aboutFr: `Sultan Ed-Djaj est une rôtisserie artisanale réputée située à Birkhadem (Les Vergers) à Alger. Spécialiste du poulet rôti doré à la broche et braisé au charbon de bois naturel, nous perpétuons les traditions culinaires algériennes avec des assaisonnements exclusifs et des viandes fraîches locales sélectionnées chaque matin.`,
+    aboutAr: `سلطان الدجاج مطعم رائد في تحضير الدجاج المحمر على السيخ والمشوي على فحم الخشب الطبيعي بحي البساتين (Les Vergers) بئر خادم بالجزائر العاصمة. نعتمد يومياً على دجاج طازج محلي وتتبيلات تقليدية أصيلة مع خدمة توصيل 24/24 ساعة.`,
+    cguFr: `1. Commandes : Toute commande validée sur notre plateforme est préparée immédiatement dans notre cuisine.
+2. Paiement : Règlement en espèces (DA) lors de la livraison ou directement au comptoir.
+3. Frais de livraison : Fixés selon la commune de destination.
+4. Annulation : Possible avant le passage en cuisson auprès de notre équipe.`,
+    cguAr: `1. الطلبات: كل طلب مؤكد عبر التطبيق يتم تحضيره فورياً في مطبخنا.
+2. الدفع: الدفع نقداً بالدينار الجزائري عند الاستلام أو بالمنصة.
+3. رسوم التوصيل: محددة حسب بلدية التوصيل.
+4. الإلغاء: متاح قبل بدء طهي الطلب عبر الاتصال بفريقنا.`,
+    privacyFr: `Vos informations personnelles (nom, téléphone, adresse de livraison) sont traitées en toute confidentialité et uniquement dédiées à l'acheminement et au suivi de vos commandes. Elles ne font l'objet d'aucun partage commercial avec des tiers.`,
+    privacyAr: `معلوماتكم الشخصية (الاسم، رقم الهاتف، عنوان التوصيل) تُعالج بسرية تامة ومخصصة حصرياً لتوصيل ومتابعة طلباتكم، ولا يتم مشاركتها بأي شكل مع أطراف خارجية.`,
+  },
+};
 
 export const INITIAL_PRODUCTS: Product[] = [
   {
@@ -20,6 +74,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 1300,
     category: 'poulets',
     isAvailable: true,
+    isVisible: true,
+    isFeatured: true,
+    sortOrder: 1,
+    countsInChickenQuota: true,
+    chickenQuotaPerItem: 1,
+    badges: ['populaire'],
+    options: [
+      { id: 'opt-1', nameFr: 'Sauce piquante maison', nameAr: 'صلصة حارة', extraPrice: 50 },
+      { id: 'opt-2', nameFr: 'Sauce ail & fines herbes', nameAr: 'صلصة الثوم والأعشاب', extraPrice: 50 },
+    ],
     imageType: 'poulet-roti',
   },
   {
@@ -31,6 +95,15 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 1500,
     category: 'poulets',
     isAvailable: true,
+    isVisible: true,
+    isFeatured: true,
+    sortOrder: 2,
+    countsInChickenQuota: true,
+    chickenQuotaPerItem: 1,
+    badges: ['nouveau'],
+    options: [
+      { id: 'opt-1', nameFr: 'Sauce piquante maison', nameAr: 'صلصة حارة', extraPrice: 50 },
+    ],
     imageType: 'poulet-braise',
   },
   {
@@ -496,7 +569,7 @@ export const TODAY_ORDERS: Order[] = [
     customerName: 'Amine Belkacem',
     customerPhone: '0770987654',
     type: 'pickup',
-    status: 'preparing',
+    status: 'ready',
     items: [
       { productId: 'prod-1', nameFr: 'Poulet rôti', nameAr: 'دجاج محمر', price: 1300, quantity: 2 },
       { productId: 'prod-3', nameFr: 'Frites fraîches maison', nameAr: 'بطاطا مقلية طازجة', price: 300, quantity: 2 },
@@ -818,10 +891,10 @@ export function generateHistoricalData(): {
 
       const orderNumber = `#SD-${String(orderSeqCounter++).padStart(4, '0')}`;
 
-      const history = [
-        { status: 'pending' as const, timestamp: orderIso },
+      const history: StatusLog[] = [
+        { status: 'pending', timestamp: orderIso },
         {
-          status: 'preparing' as const,
+          status: 'preparing',
           timestamp: new Date(orderTime.getTime() + 5 * 60000).toISOString(),
         },
       ];
@@ -979,17 +1052,25 @@ export function generateHistoricalData(): {
 export const INITIAL_SETTINGS: StoreSettings = {
   isOpen: true,
   manualOverride: false,
-  openTime: '13:00',
-  closeTime: '00:00',
+  openTime: '00:00',
+  closeTime: '23:59',
   deliveryFee: 200,
   estimatedPrepTimeMinutes: 25,
   phone: '+213 771 01 20 33',
-  address: 'Les Vergers, Birkhadem',
+  address: 'Les Vergers, Birkhadem (En face Technicum Lycée Zahoual)',
   city: 'Alger',
   soundEnabled: true,
   managerPin: '0000',
+  cookPin: '1111',
+  cashierPin: '2222',
+  requireAdminPin: false,
   dailyRevenueTarget: 25000,
   autoStockAvailability: true,
+  dailyChickenQuota: 100,
+  dailyChickenDate: new Date().toISOString().split('T')[0],
+  dailyChickenInitial: 100,
+  autoSendWhatsAppOnAccept: true,
+  whatsAppGroupInviteUrl: '',
 };
 
 export const INITIAL_ORDERS: Order[] = TODAY_ORDERS;
