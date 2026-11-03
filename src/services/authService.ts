@@ -59,7 +59,16 @@ export function getAdminToken(): string | null {
   try {
     const isLocked = sessionStorage.getItem(ADMIN_LOCKED_KEY) === 'true' || localStorage.getItem(ADMIN_LOCKED_KEY) === 'true';
     if (isLocked) return null;
-    return sessionStorage.getItem(ADMIN_TOKEN_KEY) || localStorage.getItem(ADMIN_TOKEN_KEY);
+
+    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || localStorage.getItem(ADMIN_TOKEN_KEY);
+    if (token === 'preview-caissier-token') {
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      sessionStorage.removeItem(ADMIN_ROLE_KEY);
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      localStorage.removeItem(ADMIN_ROLE_KEY);
+      return null;
+    }
+    return token;
   } catch {
     return null;
   }
@@ -150,7 +159,7 @@ export async function loginAdmin(role: UserRole, pin: string): Promise<LoginResp
 // Team Accounts API
 export async function fetchTeamAccounts(): Promise<TeamAccountApi[]> {
   const res = await authFetch('/api/auth/accounts');
-  if (!res.ok) throw new Error('Impossible de charger les comptes أ©quipe');
+  if (!res.ok) throw new Error('Impossible de charger les comptes équipe');
   return res.json();
 }
 
@@ -161,7 +170,7 @@ export async function createTeamAccount(name: string, role: UserRole): Promise<{
     body: JSON.stringify({ name, role }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || 'أ‰chec de la crأ©ation du compte');
+  if (!res.ok) throw new Error(data?.error || 'Échec de la création du compte');
   return data;
 }
 
@@ -170,7 +179,7 @@ export async function regenerateAccountPin(id: string): Promise<{ generatedPin: 
     method: 'POST',
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || 'أ‰chec de la rأ©gأ©nأ©ration du PIN');
+  if (!res.ok) throw new Error(data?.error || 'Échec de la régénération du PIN');
   return data;
 }
 
@@ -181,7 +190,7 @@ export async function changeAccountPin(id: string, pin: string): Promise<void> {
     body: JSON.stringify({ pin }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || 'أ‰chec du changement de PIN');
+  if (!res.ok) throw new Error(data?.error || 'Échec du changement de PIN');
 }
 
 export async function toggleAccountStatus(id: string, status: 'active' | 'disabled'): Promise<void> {
@@ -192,7 +201,7 @@ export async function toggleAccountStatus(id: string, status: 'active' | 'disabl
   });
   if (!res.ok) {
     const data = await res.json();
-    throw new Error(data?.error || 'أ‰chec du changement de statut');
+    throw new Error(data?.error || 'Échec du changement de statut');
   }
 }
 
@@ -202,7 +211,7 @@ export async function deleteTeamAccount(id: string): Promise<void> {
   });
   if (!res.ok) {
     const data = await res.json();
-    throw new Error(data?.error || 'أ‰chec de la suppression');
+    throw new Error(data?.error || 'Échec de la suppression');
   }
 }
 
