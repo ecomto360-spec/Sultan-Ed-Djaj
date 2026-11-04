@@ -121,6 +121,7 @@ export interface StatusLog {
 export interface Order {
   id: string;
   orderNumber: string; // e.g. #SD-0001
+  clientRequestId?: string; // UUID d'idempotence anti double-envoi
   customerId: string;
   customerName: string;
   customerPhone: string;

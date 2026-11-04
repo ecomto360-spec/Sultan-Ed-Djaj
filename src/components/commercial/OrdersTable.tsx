@@ -265,6 +265,11 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({
                           <Eye className="w-3 h-3 text-zinc-400 dark:text-zinc-500" />
                         </button>
                         <div className="flex items-center gap-1 flex-wrap">
+                          {order.isNewAlert && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-red-600 text-white shadow-sm animate-pulse">
+                              {isArabic ? 'جديد' : 'Nouvelle'}
+                            </span>
+                          )}
                           {order.source && (
                             <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
                               {order.source === 'phone'

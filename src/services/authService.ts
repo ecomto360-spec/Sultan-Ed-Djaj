@@ -2,6 +2,10 @@ import { UserRole } from '../types';
 
 const ADMIN_TOKEN_KEY = 'sultan_admin_token';
 const ADMIN_ROLE_KEY = 'sultan_admin_role';
+const SUPABASE_TOKEN_KEY = 'sultan_supabase_realtime_token';
+const SUPABASE_TOKEN_EXPIRY_KEY = 'sultan_supabase_realtime_token_expires_at';
+
+let supabaseTokenRequest: Promise<string | null> | null = null;
 
 export interface LoginResponse {
   token: string;
@@ -92,6 +96,8 @@ export function setAdminToken(token: string, role: UserRole, rememberMe = false)
 
     sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
     sessionStorage.setItem(ADMIN_ROLE_KEY, role);
+    sessionStorage.removeItem(SUPABASE_TOKEN_KEY);
+    sessionStorage.removeItem(SUPABASE_TOKEN_EXPIRY_KEY);
 
     if (rememberMe) {
       localStorage.setItem(ADMIN_TOKEN_KEY, token);
@@ -111,6 +117,8 @@ export function clearAdminToken(): void {
     localStorage.setItem(ADMIN_LOCKED_KEY, 'true');
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     sessionStorage.removeItem(ADMIN_ROLE_KEY);
+    sessionStorage.removeItem(SUPABASE_TOKEN_KEY);
+    sessionStorage.removeItem(SUPABASE_TOKEN_EXPIRY_KEY);
     localStorage.removeItem(ADMIN_TOKEN_KEY);
     localStorage.removeItem(ADMIN_ROLE_KEY);
   } catch (err) {
@@ -275,6 +283,54 @@ export async function verifyManagerPinServer(pin: string): Promise<boolean> {
   } catch {
     return clean === '0000';
   }
+}
+
+/**
+ * Récupère un jeton Supabase court signé côté serveur pour Realtime.
+ * Le jeton équipe principal reste le jeton HMAC de l'application ; celui-ci
+ * sert uniquement à autoriser la lecture Realtime via les policies RLS.
+ */
+export async function fetchSupabaseRealtimeToken(forceRefresh = false): Promise<string | null> {
+  if (!getAdminToken()) return null;
+
+  try {
+    const cachedToken = sessionStorage.getItem(SUPABASE_TOKEN_KEY);
+    const cachedExpiry = Number(sessionStorage.getItem(SUPABASE_TOKEN_EXPIRY_KEY) || 0);
+    if (!forceRefresh && cachedToken && cachedExpiry > Date.now() + 60_000) {
+      return cachedToken;
+    }
+  } catch {
+    // Le stockage peut être indisponible en navigation privée : on continue sans cache.
+  }
+
+  if (supabaseTokenRequest) return supabaseTokenRequest;
+
+  supabaseTokenRequest = (async () => {
+    try {
+      const res = await authFetch('/api/auth/realtime-token', { method: 'POST' });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      if (!data?.supabaseToken) return null;
+
+      try {
+        sessionStorage.setItem(SUPABASE_TOKEN_KEY, data.supabaseToken);
+        sessionStorage.setItem(
+          SUPABASE_TOKEN_EXPIRY_KEY,
+          String(data.supabaseExpiresAt || Date.now() + 55 * 60_000)
+        );
+      } catch {
+        // ignore
+      }
+
+      return data.supabaseToken as string;
+    } catch {
+      return null;
+    } finally {
+      supabaseTokenRequest = null;
+    }
+  })();
+
+  return supabaseTokenRequest;
 }
 
 /**

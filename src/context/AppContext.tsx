@@ -51,6 +51,14 @@ import {
   migrateOrderDefaults,
 } from '../services/salesService';
 import { authFetch, getAdminToken, getStoredAdminRole, notifyAuthLogout, verifyManagerPinServer } from '../services/authService';
+import {
+  createOrderRemote,
+  fetchOrderRemote,
+  fetchOrdersRemote,
+  isRemoteOrderId,
+  subscribeToOrderChanges,
+  updateOrderRemote,
+} from '../services/orderService';
 import { sendToWhatsApp } from '../services/whatsappService';
 
 interface AppContextType {
@@ -164,6 +172,9 @@ interface AppContextType {
   // Actions
   placeOrder: (params: {
     type: OrderType;
+    items?: OrderItem[];
+    clientRequestId: string;
+    accessToken: string;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -175,8 +186,10 @@ interface AppContextType {
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
-  }) => Order | null;
+  }) => Promise<Order | null>;
   addManualOrder: (params: {
+    clientRequestId: string;
+    accessToken: string;
     customerName: string;
     customerPhone: string;
     type: OrderType;
@@ -200,7 +213,7 @@ interface AppContextType {
     kitchenNotes?: string;
     sentToWhatsApp?: boolean;
     sentAt?: string;
-  }) => Order;
+  }) => Promise<Order | null>;
   advanceOrderStatus: (
     orderId: string,
     nextStatus: OrderStatus,
@@ -636,6 +649,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const isRemoteUpdateRef = useRef<boolean>(false);
   const sseRef = useRef<EventSource | null>(null);
   const serverVersionRef = useRef<number>(0);
+  const remoteOrdersLoadedRef = useRef<boolean>(false);
+  const ordersRefreshInFlightRef = useRef<boolean>(false);
+  const ordersRefreshPendingRef = useRef<boolean>(false);
+  const soundEnabledRef = useRef<boolean>(settings.soundEnabled);
+  const currentDayRef = useRef<Day | null>(null);
+
+  useEffect(() => {
+    soundEnabledRef.current = settings.soundEnabled;
+  }, [settings.soundEnabled]);
 
   // Recompute days stats reactively:
   // Pour la journée ouverte : calcule tout depuis les commandes (aucun compteur stocké figé).
@@ -654,6 +676,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const currentDay = useMemo(() => {
     return computedDays.find(d => d.status === 'open') || null;
   }, [computedDays]);
+
+  useEffect(() => {
+    currentDayRef.current = currentDay;
+  }, [currentDay]);
 
   // Check if the open day is from a past date (Africa/Algiers)
   const unclosedPastDay = useMemo(() => {
@@ -877,6 +903,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setDays(nextDays);
     setCashClosings(nextCashClosings);
 
+    // Synchroniser vers Supabase les commandes actives résolues par la clôture.
+    const previousOrdersById = new Map(orders.map(o => [o.id, o]));
+    const remoteOrdersToSync = nextOrders.filter(next => {
+      const previous = previousOrdersById.get(next.id);
+      return previous && isRemoteOrderId(next.id) && previous.status !== next.status;
+    });
+    if (remoteOrdersToSync.length > 0) {
+      void Promise.allSettled(
+        remoteOrdersToSync.map(next => {
+          const previous = previousOrdersById.get(next.id)!;
+          return updateOrderRemote(next.id, {
+            status: next.status,
+            note: next.statusHistory?.[next.statusHistory.length - 1]?.note,
+            cancellationReason: next.cancellationReason,
+            isNewAlert: false,
+            expectedUpdatedAt: previous.updatedAt,
+            language,
+          });
+        })
+      ).then(results => {
+        const successful = results
+          .filter((result): result is PromiseFulfilledResult<Order> => result.status === 'fulfilled')
+          .map(result => result.value);
+        if (successful.length > 0) {
+          mergeRemoteOrders(successful, { announceNew: false });
+        }
+        if (results.some(result => result.status === 'rejected')) {
+          void refreshOrdersFromSupabase();
+          alert(
+            language === 'ar'
+              ? 'بعض حالات الطلبات لم تتم مزامنتها عند الإغلاق.'
+              : 'Certains statuts de commandes n’ont pas pu être synchronisés lors de la clôture.'
+          );
+        }
+      });
+    }
+
     // Notifier le serveur via POST /api/day/close avec les détails
     try {
       authFetch('/api/day/close', {
@@ -894,7 +957,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     pushPatchToServer({
-      orders: nextOrders,
       days: nextDays,
       cashClosings: nextCashClosings,
     });
@@ -1103,76 +1165,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Apply authoritative state received from the server (WebSocket or REST polling)
   const applyRemoteServerState = (remoteState: any) => {
     if (!remoteState) return;
+
+    // Les commandes ne transitent plus par l'ancien état serveur/fichier JSON :
+    // Supabase (via /api/orders) est désormais leur seule source partagée.
+    remoteState = { ...remoteState };
+    delete remoteState.orders;
+
     isRemoteUpdateRef.current = true;
     try {
       if (typeof remoteState.version === 'number') {
         serverVersionRef.current = remoteState.version;
-      }
-
-      if (Array.isArray(remoteState.orders)) {
-        const incomingOrders: Order[] = remoteState.orders.map(migrateOrderDefaults);
-        setOrders(prev => {
-          const statusRank: Record<string, number> = {
-            pending: 1,
-            preparing: 2,
-            ready: 3,
-            delivered: 4,
-            cancelled: 5,
-          };
-
-          const incomingMap = new Map<string, Order>(incomingOrders.map(o => [o.id, o]));
-          const prevMap = new Map<string, Order>(prev.map(o => [o.id, o]));
-          const localAheadOrders: Order[] = [];
-
-          // Check if local state has any order missing on server or with more advanced status
-          for (const localOrd of prev) {
-            const remoteOrd = incomingMap.get(localOrd.id);
-            if (!remoteOrd) {
-              incomingMap.set(localOrd.id, localOrd);
-              localAheadOrders.push(localOrd);
-            } else {
-              const localHist = localOrd.statusHistory?.length || 0;
-              const remoteHist = remoteOrd.statusHistory?.length || 0;
-              const localRank = statusRank[localOrd.status] || 0;
-              const remoteRank = statusRank[remoteOrd.status] || 0;
-              if (localHist > remoteHist || (localHist === remoteHist && localRank > remoteRank)) {
-                incomingMap.set(localOrd.id, localOrd);
-                localAheadOrders.push(localOrd);
-              }
-            }
-          }
-
-          const mergedOrders = Array.from(incomingMap.values()).sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-
-          if (localAheadOrders.length > 0 && getAdminToken()) {
-            setTimeout(() => {
-              pushPatchToServer({ orders: mergedOrders });
-            }, 50);
-          }
-
-          const prevStr = JSON.stringify(prev);
-          const nextStr = JSON.stringify(mergedOrders);
-          if (prevStr === nextStr) return prev;
-
-          // Check if a brand new pending order arrived (for Commercial back-office alert)
-          const hasBrandNewOrder = mergedOrders.some(
-            o => !prevMap.has(o.id) && o.status === 'pending'
-          );
-          // Check if an existing active order changed status (for Client smartphone notification)
-          const hasStatusChanged = mergedOrders.some(o => {
-            const old = prevMap.get(o.id);
-            return old && old.status !== o.status;
-          });
-
-          if (hasBrandNewOrder) {
-            soundService.playNewOrderBeep();
-          } else if (hasStatusChanged) {
-            soundService.playSuccess();
-          }
-          return mergedOrders;
-        });
       }
 
       if (Array.isArray(remoteState.products)) {
@@ -1290,46 +1292,118 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // Push atomic order update immediately (when placing order on smartphone or changing status on PC)
-  const pushOrderActionToServer = (
-    order: Order,
-    extra?: {
-      stockItems?: StockItem[];
-      stockMovements?: StockMovement[];
-      customers?: Customer[];
+  const normalizeRemoteOrderForCurrentDay = (order: Order): Order => {
+    const day = currentDayRef.current;
+    if (!day || day.status !== 'open' || !day.openedAt) return order;
+
+    const openedTime = new Date(day.openedAt).getTime();
+    const orderTime = new Date(order.createdAt).getTime();
+    const sameBusinessDate = getAlgiersDateString(order.createdAt) === day.date;
+    if (
+      order.dayId !== day.id &&
+      (
+        sameBusinessDate ||
+        (Number.isFinite(openedTime) && Number.isFinite(orderTime) && orderTime >= openedTime)
+      )
+    ) {
+      // La journée reste locale à chaque appareil : on rattache visuellement
+      // la commande partagée à la journée ouverte de cet appareil pour que
+      // Kanban, compteurs et statistiques se mettent à jour ensemble.
+      return { ...order, dayId: day.id };
     }
-  ) => {
-    try {
-      fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order,
-          ...extra,
-        }),
-      })
-        .then(async r => {
-          if (!r.ok) {
-            const err = await r.json().catch(() => ({}));
-            console.warn('POST /api/order failed:', r.status, err);
-            return null;
-          }
-          return r.json();
-        })
-        .then(data => {
-          if (data) {
-            setTimeout(() => {
-              refreshRemoteState();
-            }, 300);
-          }
-        })
-        .catch(err => {
-          console.warn('Network error pushing order to server:', err);
-        });
-    } catch {
-      // Ignore network errors
-    }
+
+    return order;
   };
+
+  const mergeRemoteOrders = (
+    incomingOrders: Order[],
+    { announceNew = true }: { announceNew?: boolean } = {}
+  ) => {
+    if (!Array.isArray(incomingOrders) || incomingOrders.length === 0) return;
+
+    setOrders(prev => {
+      const mergedById = new Map<string, Order>(prev.map(order => [order.id, order]));
+      let changed = false;
+      let hasBrandNewPending = false;
+      let hasStatusChanged = false;
+
+      for (const rawIncoming of incomingOrders) {
+        const existing = mergedById.get(rawIncoming.id);
+        const normalized = normalizeRemoteOrderForCurrentDay(migrateOrderDefaults(rawIncoming));
+        const nextOrder: Order = {
+          ...normalized,
+          isNewAlert: existing
+            ? (existing.isNewAlert === false ? false : normalized.isNewAlert)
+            : (normalized.status === 'pending' ? true : normalized.isNewAlert),
+        };
+
+        if (
+          !existing &&
+          announceNew &&
+          remoteOrdersLoadedRef.current &&
+          nextOrder.status === 'pending'
+        ) {
+          hasBrandNewPending = true;
+        }
+
+        if (existing && existing.status !== nextOrder.status) {
+          hasStatusChanged = true;
+        }
+
+        if (!existing || JSON.stringify(existing) !== JSON.stringify(nextOrder)) {
+          changed = true;
+          mergedById.set(nextOrder.id, nextOrder);
+        }
+      }
+
+      if (!changed) return prev;
+
+      if (soundEnabledRef.current) {
+        if (hasBrandNewPending) {
+          soundService.playNewOrderBeep();
+        } else if (hasStatusChanged) {
+          soundService.playSuccess();
+        }
+      }
+
+      return Array.from(mergedById.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    });
+  };
+
+  const refreshOrdersFromSupabase = useCallback(async () => {
+    if (ordersRefreshInFlightRef.current) {
+      ordersRefreshPendingRef.current = true;
+      return;
+    }
+    ordersRefreshInFlightRef.current = true;
+
+    try {
+      let incoming: Order[] = [];
+
+      if (getAdminToken()) {
+        incoming = await fetchOrdersRemote(500);
+      } else if (clientActiveOrderId && isRemoteOrderId(clientActiveOrderId)) {
+        incoming = [await fetchOrderRemote(clientActiveOrderId)];
+      } else {
+        return;
+      }
+
+      mergeRemoteOrders(incoming);
+      remoteOrdersLoadedRef.current = true;
+    } catch (err) {
+      // Le polling/Realtime réessaiera automatiquement ; après une coupure,
+      // la prochaine lecture complète rattrape toutes les commandes manquées.
+      console.warn('Order synchronization failed:', err);
+    } finally {
+      ordersRefreshInFlightRef.current = false;
+      if (ordersRefreshPendingRef.current) {
+        ordersRefreshPendingRef.current = false;
+        void refreshOrdersFromSupabase();
+      }
+    }
+  }, [clientActiveOrderId]);
 
   // Explicit remote state fetch function (available for polling, order creation & manual refresh button)
   const refreshRemoteState = useCallback(async () => {
@@ -1403,6 +1477,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   }, [userRole, clientActiveOrderId, refreshRemoteState]);
 
+  // Commandes partagées : Supabase Realtime + polling de secours toutes les 5 s.
+  // Le même mécanisme sert au rattrapage après retour du réseau.
+  useEffect(() => {
+    let isMounted = true;
+
+    const refresh = () => {
+      if (isMounted) void refreshOrdersFromSupabase();
+    };
+
+    refresh();
+
+    const unsubscribe = subscribeToOrderChanges({
+      customerOrderId: clientActiveOrderId,
+      onChange: refresh,
+    });
+
+    const pollInterval = setInterval(refresh, 5000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      unsubscribe();
+    };
+  }, [clientActiveOrderId, authenticatedRole, userRole, refreshOrdersFromSupabase]);
+
   // Automatically sync general state changes to server when modified locally (Admin only)
   useEffect(() => {
     if (isRemoteUpdateRef.current || !getAdminToken()) return;
@@ -1411,7 +1518,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         pushPatchToServer({
           products,
           customers,
-          orders,
           days: computedDays,
           settings,
           stockItems,
@@ -1426,7 +1532,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [
     products,
     customers,
-    orders,
     computedDays,
     settings,
     stockItems,
@@ -1445,12 +1550,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const incomingOrders: Order[] = JSON.parse(e.newValue);
           setOrders(prev => {
             if (JSON.stringify(prev) === e.newValue) return prev;
-            const prevIds = new Set(prev.map(o => o.id));
-            const hasBrandNewOrder = incomingOrders.some(o => !prevIds.has(o.id) && o.status === 'pending');
-            if (hasBrandNewOrder) {
+
+            // Ne jamais laisser un cache local d'un autre onglet écraser une
+            // commande Supabase plus récente déjà affichée dans celui-ci.
+            const mergedById = new Map<string, Order>(prev.map(o => [o.id, o]));
+            let changed = false;
+            let hasBrandNewOrder = false;
+
+            for (const incoming of incomingOrders) {
+              const existing = mergedById.get(incoming.id);
+              if (!existing) {
+                mergedById.set(incoming.id, incoming);
+                changed = true;
+                if (incoming.status === 'pending') hasBrandNewOrder = true;
+                continue;
+              }
+
+              const existingTime = new Date(existing.updatedAt || existing.createdAt).getTime();
+              const incomingTime = new Date(incoming.updatedAt || incoming.createdAt).getTime();
+              if (
+                (!Number.isFinite(existingTime) || !Number.isFinite(incomingTime) || incomingTime >= existingTime) &&
+                JSON.stringify(existing) !== JSON.stringify(incoming)
+              ) {
+                mergedById.set(incoming.id, incoming);
+                changed = true;
+              }
+            }
+
+            if (!changed) return prev;
+            if (hasBrandNewOrder && soundEnabledRef.current) {
               soundService.playNewOrderBeep();
             }
-            return incomingOrders;
+
+            return Array.from(mergedById.values()).sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
           });
         } else if (e.key === STORAGE_KEYS.DAYS && e.newValue) {
           setDays(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
@@ -1645,42 +1779,50 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setClientActiveOrderId(ord ? ord.id : null);
   };
 
-  // Helper for continuous #SD-xxxx numbering without ever resetting
-  const getNextOrderNumber = (existingOrders: Order[]): string => {
-    let maxNum = existingOrders.length;
-    for (const o of existingOrders) {
-      const m = o.orderNumber?.match(/#SD-(\d+)/i);
-      if (m) {
-        const parsed = parseInt(m[1], 10);
-        if (!isNaN(parsed) && parsed > maxNum) {
-          maxNum = parsed;
-        }
-      }
-    }
-    return `#SD-${String(maxNum + 1).padStart(4, '0')}`;
-  };
-
   const unreadAlertCount = orders.filter(
     o =>
       o.isNewAlert &&
       o.status === 'pending' &&
-      (!currentDay || o.dayId === currentDay.id)
+      (!currentDay ||
+        o.dayId === currentDay.id ||
+        getAlgiersDateString(o.createdAt) === currentDay.date)
   ).length;
 
   const clearNewOrderAlert = (orderId: string) => {
+    const previousOrder = orders.find(o => o.id === orderId);
     setOrders(prev =>
       prev.map(o => (o.id === orderId ? { ...o, isNewAlert: false } : o))
     );
+
+    if (isRemoteOrderId(orderId) && previousOrder) {
+      void updateOrderRemote(orderId, {
+        isNewAlert: false,
+        expectedUpdatedAt: previousOrder.updatedAt,
+      })
+        .then(serverOrder => mergeRemoteOrders([serverOrder], { announceNew: false }))
+        .catch(err => {
+          console.warn('Remote order alert update failed:', err);
+          setOrders(prev => prev.map(o => (o.id === orderId ? previousOrder : o)));
+          void refreshOrdersFromSupabase();
+        });
+    }
   };
 
-  // Place order from Client
-  const placeOrder = ({
+  // Place order from Client : la commande n'existe localement qu'après
+  // confirmation de /api/orders. En cas d'échec, le panier reste intact.
+  const placeOrder = async ({
     type,
+    items: requestedItems,
+    clientRequestId,
+    accessToken,
     deliveryAddress,
     pickupTimeSlot,
     kitchenNotes,
   }: {
     type: OrderType;
+    items?: OrderItem[];
+    clientRequestId: string;
+    accessToken: string;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -1692,23 +1834,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     pickupTimeSlot?: string;
     kitchenNotes?: string;
-  }): Order | null => {
-    if (cart.length === 0) return null;
-    if (!isStoreActuallyOpen || !currentDay) return null;
+  }): Promise<Order | null> => {
+    const items = requestedItems?.length ? [...requestedItems] : [...cart];
 
-    // Check if any product is out of stock
-    const unavailable = cart.some(item => {
+    if (items.length === 0) {
+      throw new Error(language === 'ar' ? 'سلة المشتريات فارغة.' : 'Votre panier est vide.');
+    }
+
+    if (!isStoreActuallyOpen || !currentDay) {
+      throw new Error(
+        language === 'ar'
+          ? 'المطعم مغلق حالياً. لا يمكن استقبال طلبات جديدة.'
+          : 'Le restaurant est actuellement fermé. Commandes impossibles.'
+      );
+    }
+
+    const unavailable = items.some(item => {
       const prod = products.find(p => p.id === item.productId);
       return prod && !prod.isAvailable;
     });
-    if (unavailable) return null;
-
-    const subtotal = cartTotal;
-    const fee = type === 'delivery' ? settings.deliveryFee : 0;
-    const total = subtotal + fee;
-
-    const orderNumber = getNextOrderNumber(orders);
-    const nowIso = new Date().toISOString();
+    if (unavailable) {
+      throw new Error(
+        language === 'ar'
+          ? 'منتج واحد على الأقل لم يعد متاحاً.'
+          : 'Au moins un produit de votre panier n’est plus disponible.'
+      );
+    }
 
     const customer = currentCustomer || {
       id: 'cust-guest',
@@ -1721,73 +1872,67 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       mapUrl: deliveryAddress?.mapUrl,
       latitude: deliveryAddress?.latitude,
       longitude: deliveryAddress?.longitude,
-      orderCount: 1,
-      totalSpent: total,
-      createdAt: nowIso,
+      orderCount: 0,
+      totalSpent: 0,
+      createdAt: new Date().toISOString(),
     };
 
-    const newOrder: Order = {
-      id: `ord-${Date.now()}`,
-      orderNumber,
-      dayId: currentDay.id,
+    const { order: serverOrder } = await createOrderRemote({
+      clientRequestId,
+      accessToken,
       customerId: customer.id,
       customerName: customer.name,
       customerPhone: customer.phone,
       type,
-      status: 'pending',
       source: 'app',
-      paymentMethod: 'cash',
-      items: [...cart],
-      subtotal,
-      deliveryFee: fee,
-      total,
+      items,
       deliveryAddress: type === 'delivery' ? deliveryAddress : undefined,
       pickupTimeSlot: type === 'pickup' ? pickupTimeSlot || 'Dès que possible' : undefined,
       kitchenNotes,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      statusHistory: [
-        {
-          status: 'pending',
-          timestamp: nowIso,
-          note: language === 'ar' ? 'تم استلام الطلب من تطبيق الزبون' : 'Commande reçue depuis l\'application client',
-        },
-      ],
-      isNewAlert: true,
-      stockDeducted: false,
-    };
+      dayId: currentDay.id,
+      language,
+    }, { staff: false });
 
-    // Update customer stats
     setCustomers(prev =>
       prev.map(c =>
         c.id === customer.id
           ? {
               ...c,
               orderCount: c.orderCount + 1,
-              totalSpent: c.totalSpent + total,
+              totalSpent: c.totalSpent + serverOrder.total,
             }
           : c
       )
     );
 
-    // Add to orders
-    setOrders(prev => [newOrder, ...prev]);
-    setClientActiveOrderId(newOrder.id);
-    clearCart();
+    mergeRemoteOrders([serverOrder], { announceNew: false });
+    remoteOrdersLoadedRef.current = true;
+    setClientActiveOrderId(serverOrder.id);
 
-    // Immediately broadcast new order to server so PC Back-Office receives it in real time
-    pushOrderActionToServer(newOrder);
+    // Ne retirer que les quantités effectivement confirmées par le serveur.
+    setCart(prev => {
+      let next = [...prev];
+      for (const orderedItem of items) {
+        next = next
+          .map(item => item.productId === orderedItem.productId
+            ? { ...item, quantity: item.quantity - orderedItem.quantity }
+            : item)
+          .filter(item => item.quantity > 0);
+      }
+      return next;
+    });
 
-    // Trigger sound alert
     if (settings.soundEnabled) {
       soundService.playNewOrderBeep();
     }
 
-    return newOrder;
+    return serverOrder;
   };
 
-  // Add manual order from Back-Office
-  const addManualOrder = ({
+  // Add manual order from Back-Office via la même API partagée.
+  const addManualOrder = async ({
+    clientRequestId,
+    accessToken,
     customerName,
     customerPhone,
     type,
@@ -1804,6 +1949,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     sentToWhatsApp,
     sentAt,
   }: {
+    clientRequestId: string;
+    accessToken: string;
     customerName: string;
     customerPhone: string;
     type: OrderType;
@@ -1827,53 +1974,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     kitchenNotes?: string;
     sentToWhatsApp?: boolean;
     sentAt?: string;
-  }): Order => {
-    const subtotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
-    const fee = type === 'delivery' ? (customDeliveryFee !== undefined ? customDeliveryFee : settings.deliveryFee) : 0;
-    const total = subtotal + fee;
-    const orderNumber = getNextOrderNumber(orders);
+  }): Promise<Order | null> => {
     const nowIso = new Date().toISOString();
+    const existingCustomer = customers.find(c => c.phone === customerPhone);
+    const customerForOrder: Customer = existingCustomer || {
+      id: `cust-${Date.now()}`,
+      name: customerName,
+      phone: customerPhone,
+      wilaya: 'Alger',
+      commune: deliveryAddress?.commune || 'Birkhadem',
+      address: deliveryAddress?.address || 'Au comptoir',
+      landmark: deliveryAddress?.landmark,
+      mapUrl: deliveryAddress?.mapUrl,
+      latitude: deliveryAddress?.latitude,
+      longitude: deliveryAddress?.longitude,
+      orderCount: 0,
+      totalSpent: 0,
+      createdAt: nowIso,
+    };
 
-    let matchedCustomer = customers.find(c => c.phone === customerPhone);
-    if (!matchedCustomer) {
-      matchedCustomer = {
-        id: `cust-${Date.now()}`,
-        name: customerName,
-        phone: customerPhone,
-        wilaya: 'Alger',
-        commune: deliveryAddress?.commune || 'Birkhadem',
-        address: deliveryAddress?.address || 'Au comptoir',
-        landmark: deliveryAddress?.landmark,
-        mapUrl: deliveryAddress?.mapUrl,
-        latitude: deliveryAddress?.latitude,
-        longitude: deliveryAddress?.longitude,
-        orderCount: 1,
-        totalSpent: total,
-        createdAt: nowIso,
-      };
-      setCustomers(prev => [matchedCustomer!, ...prev]);
-    } else {
-      setCustomers(prev =>
-        prev.map(c =>
-          c.id === matchedCustomer!.id
-            ? {
-                ...c,
-                orderCount: c.orderCount + 1,
-                totalSpent: c.totalSpent + total,
-                mapUrl: deliveryAddress?.mapUrl || c.mapUrl,
-                latitude: deliveryAddress?.latitude || c.latitude,
-                longitude: deliveryAddress?.longitude || c.longitude,
-              }
-            : c
-        )
-      );
-    }
-
-    const newOrder: Order = {
-      id: `ord-${Date.now()}`,
-      orderNumber,
-      dayId: currentDay?.id,
-      customerId: matchedCustomer.id,
+    const { order: serverOrder } = await createOrderRemote({
+      clientRequestId,
+      accessToken,
+      customerId: customerForOrder.id,
       customerName,
       customerPhone,
       type,
@@ -1883,38 +2006,52 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       driverName: type === 'delivery' ? driverName : undefined,
       driverFee: type === 'delivery' ? driverFee : undefined,
       items,
-      subtotal,
-      deliveryFee: fee,
-      total,
+      deliveryFee: customDeliveryFee,
       deliveryAddress: type === 'delivery' ? deliveryAddress : undefined,
       pickupTimeSlot: type === 'pickup' ? pickupTimeSlot : undefined,
       kitchenNotes,
-      createdAt: nowIso,
-      updatedAt: nowIso,
+      dayId: currentDay?.id,
+      stockDeducted: initialStatus === 'ready' || (initialStatus as any) === 'preparing',
       sentToWhatsApp: Boolean(sentToWhatsApp),
       sentAt: sentAt || (sentToWhatsApp ? nowIso : undefined),
-      statusHistory: [
-        {
-          status: initialStatus,
-          timestamp: nowIso,
-          note:
-            initialStatus === 'ready' || (initialStatus as any) === 'preparing'
-              ? 'Commande manuelle acceptée (prête)'
-              : 'Commande manuelle saisie au back-office',
-        },
-      ],
-      isNewAlert: false,
-      stockDeducted: initialStatus === 'ready' || (initialStatus as any) === 'preparing',
-    };
+      language,
+    }, { staff: true });
 
-    if (initialStatus === 'ready' || (initialStatus as any) === 'preparing') {
-      deductStockForOrder(newOrder);
+    if (existingCustomer) {
+      setCustomers(prev =>
+        prev.map(c =>
+          c.id === existingCustomer.id
+            ? {
+                ...c,
+                orderCount: c.orderCount + 1,
+                totalSpent: c.totalSpent + serverOrder.total,
+                mapUrl: deliveryAddress?.mapUrl || c.mapUrl,
+                latitude: deliveryAddress?.latitude || c.latitude,
+                longitude: deliveryAddress?.longitude || c.longitude,
+              }
+            : c
+        )
+      );
+    } else {
+      setCustomers(prev => [{
+        ...customerForOrder,
+        orderCount: 1,
+        totalSpent: serverOrder.total,
+      }, ...prev]);
     }
 
-    setOrders(prev => [newOrder, ...prev]);
-    pushOrderActionToServer(newOrder);
+    if (initialStatus === 'ready' || (initialStatus as any) === 'preparing') {
+      deductStockForOrder(serverOrder);
+    }
+
+    // L'appareil qui saisit la commande ne doit pas se l'alerter à lui-même ;
+    // les autres tableaux de bord la verront comme nouvelle.
+    mergeRemoteOrders([serverOrder], { announceNew: false });
+    setOrders(prev => prev.map(o => o.id === serverOrder.id ? { ...o, isNewAlert: false } : o));
+    remoteOrdersLoadedRef.current = true;
     soundService.playSuccess();
-    return newOrder;
+
+    return { ...serverOrder, isNewAlert: false };
   };
 
   // Helper: Deduct stock when order enters 'preparing'
@@ -1994,27 +2131,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         !targetOrder.sentToWhatsApp
     );
 
-    let updatedTargetOrder: Order | null = null;
-
-    setOrders(prev =>
-      prev.map(o => {
-        if (o.id !== orderId) return o;
-        const nextOrd: Order = {
-          ...o,
+    const updatedTargetOrder: Order | null = targetOrder
+      ? {
+          ...targetOrder,
           status: nextStatus,
-          paymentMethod: paymentMethod || o.paymentMethod || 'cash',
-          driverName: driverName !== undefined ? driverName : o.driverName,
-          driverFee: driverFee !== undefined ? driverFee : o.driverFee,
+          paymentMethod: paymentMethod || targetOrder.paymentMethod || 'cash',
+          driverName: driverName !== undefined ? driverName : targetOrder.driverName,
+          driverFee: driverFee !== undefined ? driverFee : targetOrder.driverFee,
           updatedAt: nowIso,
           isNewAlert: false,
-          sentToWhatsApp: shouldAutoSendWhatsApp ? true : o.sentToWhatsApp,
-          sentAt: shouldAutoSendWhatsApp ? nowIso : o.sentAt,
+          sentToWhatsApp: shouldAutoSendWhatsApp ? true : targetOrder.sentToWhatsApp,
+          sentAt: shouldAutoSendWhatsApp ? nowIso : targetOrder.sentAt,
           stockDeducted:
             nextStatus === 'ready' || (nextStatus as any) === 'preparing'
               ? true
-              : o.stockDeducted,
+              : targetOrder.stockDeducted,
           statusHistory: [
-            ...(Array.isArray(o.statusHistory) ? o.statusHistory : []),
+            ...(Array.isArray(targetOrder.statusHistory) ? targetOrder.statusHistory : []),
             {
               status: nextStatus,
               timestamp: nowIso,
@@ -2027,17 +2160,54 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   : 'Statut mis à jour'),
             },
           ],
-        };
-        updatedTargetOrder = nextOrd;
-        return nextOrd;
-      })
-    );
+        }
+      : null;
 
     if (updatedTargetOrder) {
-      pushOrderActionToServer(updatedTargetOrder);
-      if (shouldAutoSendWhatsApp) {
+      setOrders(prev => prev.map(o => (o.id === orderId ? updatedTargetOrder : o)));
+    }
+
+    if (updatedTargetOrder) {
+      const optimisticOrder = updatedTargetOrder as Order;
+
+      if (isRemoteOrderId(orderId) && targetOrder) {
+        void updateOrderRemote(orderId, {
+          status: nextStatus,
+          note,
+          paymentMethod: optimisticOrder.paymentMethod,
+          driverName: optimisticOrder.driverName,
+          driverFee: optimisticOrder.driverFee,
+          stockDeducted: optimisticOrder.stockDeducted,
+          isNewAlert: false,
+          sentToWhatsApp: optimisticOrder.sentToWhatsApp,
+          sentAt: optimisticOrder.sentAt,
+          expectedUpdatedAt: targetOrder.updatedAt,
+          language,
+        })
+          .then(serverOrder => {
+            mergeRemoteOrders([serverOrder], { announceNew: false });
+            if (shouldAutoSendWhatsApp) {
+              try {
+                sendToWhatsApp(serverOrder);
+              } catch (err) {
+                console.warn('Auto send WhatsApp failed:', err);
+              }
+            }
+          })
+          .catch(err => {
+            console.warn('Remote order status update failed:', err);
+            setOrders(prev => prev.map(o => (o.id === orderId ? targetOrder : o)));
+            void refreshOrdersFromSupabase();
+            alert(
+              err?.message ||
+                (language === 'ar'
+                  ? 'فشلت مزامنة حالة الطلب. حاول مرة أخرى.'
+                  : 'Échec de synchronisation du statut. Veuillez réessayer.')
+            );
+          });
+      } else if (shouldAutoSendWhatsApp) {
         try {
-          sendToWhatsApp(updatedTargetOrder);
+          sendToWhatsApp(optimisticOrder);
         } catch (err) {
           console.warn('Auto send WhatsApp failed:', err);
         }
@@ -2050,22 +2220,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Mark order as dispatched to WhatsApp group
   const markOrderSentToWhatsApp = (orderId: string) => {
     const nowIso = new Date().toISOString();
-    let updatedTargetOrder: Order | null = null;
-    setOrders(prev =>
-      prev.map(o => {
-        if (o.id !== orderId) return o;
-        const updated: Order = {
-          ...o,
+    const previousOrder = orders.find(o => o.id === orderId);
+    const updatedTargetOrder: Order | null = previousOrder
+      ? {
+          ...previousOrder,
           sentToWhatsApp: true,
           sentAt: nowIso,
           updatedAt: nowIso,
-        };
-        updatedTargetOrder = updated;
-        return updated;
-      })
-    );
+        }
+      : null;
+
     if (updatedTargetOrder) {
-      pushOrderActionToServer(updatedTargetOrder);
+      setOrders(prev => prev.map(o => (o.id === orderId ? updatedTargetOrder : o)));
+    }
+
+    if (updatedTargetOrder && isRemoteOrderId(orderId) && previousOrder) {
+      void updateOrderRemote(orderId, {
+        sentToWhatsApp: true,
+        sentAt: nowIso,
+        expectedUpdatedAt: previousOrder.updatedAt,
+      })
+        .then(serverOrder => mergeRemoteOrders([serverOrder], { announceNew: false }))
+        .catch(err => {
+          console.warn('Remote WhatsApp status update failed:', err);
+          setOrders(prev => prev.map(o => (o.id === orderId ? previousOrder : o)));
+          void refreshOrdersFromSupabase();
+        });
     }
   };
 
@@ -2155,33 +2335,49 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
-    let cancelledTargetOrder: Order | null = null;
-
-    setOrders(prev =>
-      prev.map(o => {
-        if (o.id !== orderId) return o;
-        const cancelledOrd: Order = {
-          ...o,
+    const cancelledTargetOrder: Order | null = order
+      ? {
+          ...order,
           status: 'cancelled',
           cancellationReason: reason,
           updatedAt: nowIso,
           isNewAlert: false,
           statusHistory: [
-            ...(Array.isArray(o.statusHistory) ? o.statusHistory : []),
+            ...(Array.isArray(order.statusHistory) ? order.statusHistory : []),
             {
               status: 'cancelled',
               timestamp: nowIso,
               note: `Annulée: ${reason}`,
             },
           ],
-        };
-        cancelledTargetOrder = cancelledOrd;
-        return cancelledOrd;
-      })
-    );
+        }
+      : null;
 
     if (cancelledTargetOrder) {
-      pushOrderActionToServer(cancelledTargetOrder);
+      setOrders(prev => prev.map(o => (o.id === orderId ? cancelledTargetOrder : o)));
+    }
+
+    if (cancelledTargetOrder && isRemoteOrderId(orderId) && order) {
+      void updateOrderRemote(orderId, {
+        status: 'cancelled',
+        note: `Annulée: ${reason}`,
+        cancellationReason: reason,
+        isNewAlert: false,
+        expectedUpdatedAt: order.updatedAt,
+        language,
+      })
+        .then(serverOrder => mergeRemoteOrders([serverOrder], { announceNew: false }))
+        .catch(err => {
+          console.warn('Remote order cancellation failed:', err);
+          setOrders(prev => prev.map(o => (o.id === orderId ? order : o)));
+          void refreshOrdersFromSupabase();
+          alert(
+            err?.message ||
+              (language === 'ar'
+                ? 'فشلت مزامنة إلغاء الطلب. حاول مرة أخرى.'
+                : 'Échec de synchronisation de l’annulation. Veuillez réessayer.')
+          );
+        });
     }
 
     setCancelModalOrder(null);
@@ -2848,7 +3044,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         reorderPastOrder,
         registerOrLoginCustomer,
         logoutCustomer,
-        refreshSync: refreshRemoteState,
+        refreshSync: async () => {
+          await Promise.allSettled([refreshRemoteState(), refreshOrdersFromSupabase()]);
+        },
       }}
     >
       {children}

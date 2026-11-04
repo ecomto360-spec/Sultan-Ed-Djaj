@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { OrderType, OrderItem, PaymentMethod, OrderSource, Product, Customer } from '../../types';
@@ -21,6 +21,7 @@ import {
   Clock,
   MapPin,
   Flame,
+  Loader2,
 } from 'lucide-react';
 import { sendToWhatsApp } from '../../services/whatsappService';
 
@@ -70,6 +71,9 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
   const [kitchenNotes, setKitchenNotes] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [failedAction, setFailedAction] = useState<'create' | 'create_and_whatsapp' | 'create_and_accept' | null>(null);
+  const submitLockRef = useRef(false);
 
   // Autocomplete suggestions based on customer phone
   const phoneSuggestions = useMemo(() => {
@@ -168,10 +172,88 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
     return true;
   };
 
+  const createUuid = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
+      const random = Math.floor(Math.random() * 16);
+      const value = char === 'x' ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  };
+
+  const getManualOrderAttempt = (action: 'create' | 'create_and_whatsapp' | 'create_and_accept') => {
+    const storageKey = 'sultan_manual_order_attempt_v1';
+    const fingerprint = JSON.stringify({
+      action,
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      orderType,
+      source,
+      paymentMethod,
+      driverName,
+      driverFee,
+      selectedItems,
+      effectiveDeliveryFee,
+      commune,
+      address,
+      landmark,
+      mapUrl,
+      pickupTimeSlotType,
+      scheduledPickupTime,
+      kitchenNotes: kitchenNotes.trim(),
+    });
+
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.fingerprint === fingerprint && parsed?.clientRequestId && parsed?.accessToken) {
+          return {
+            clientRequestId: parsed.clientRequestId as string,
+            accessToken: parsed.accessToken as string,
+          };
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const attempt = {
+      fingerprint,
+      clientRequestId: createUuid(),
+      accessToken: `${createUuid()}${createUuid()}`,
+    };
+
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(attempt));
+    } catch {
+      // ignore
+    }
+
+    return {
+      clientRequestId: attempt.clientRequestId,
+      accessToken: attempt.accessToken,
+    };
+  };
+
+  const clearManualOrderAttempt = () => {
+    try {
+      sessionStorage.removeItem('sultan_manual_order_attempt_v1');
+    } catch {
+      // ignore
+    }
+  };
+
   // Helper to submit with different action targets
-  const handleCreateOrder = (action: 'create' | 'create_and_whatsapp' | 'create_and_accept') => {
+  const handleCreateOrder = async (
+    action: 'create' | 'create_and_whatsapp' | 'create_and_accept'
+  ) => {
+    if (submitLockRef.current) return;
     if (!validateForm()) return;
 
+    const attempt = getManualOrderAttempt(action);
     const feeNum = driverFee ? parseFloat(driverFee) : undefined;
     const slot =
       orderType === 'pickup'
@@ -185,43 +267,72 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
     const sentToWhatsApp = action === 'create_and_whatsapp';
     const nowIso = new Date().toISOString();
 
-    const newOrder = addManualOrder({
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
-      type: orderType,
-      status: initialStatus,
-      source,
-      paymentMethod,
-      driverName: orderType === 'delivery' && driverName.trim() ? driverName.trim() : undefined,
-      driverFee: orderType === 'delivery' && feeNum !== undefined ? feeNum : undefined,
-      items: selectedItems,
-      deliveryFee: effectiveDeliveryFee,
-      deliveryAddress:
-        orderType === 'delivery'
-          ? {
-              wilaya: 'Alger',
-              commune: commune.trim() || 'Birkhadem',
-              address: address.trim(),
-              landmark: landmark.trim() || undefined,
-              mapUrl: mapUrl.trim() || undefined,
-            }
-          : undefined,
-      pickupTimeSlot: slot,
-      kitchenNotes: kitchenNotes.trim() || undefined,
-      sentToWhatsApp,
-      sentAt: sentToWhatsApp ? nowIso : undefined,
-    });
+    submitLockRef.current = true;
+    setIsSubmitting(true);
+    setFailedAction(null);
+    setErrorMsg('');
 
-    if (action === 'create_and_whatsapp' && newOrder) {
-      // Trigger WhatsApp open
-      try {
-        sendToWhatsApp(newOrder);
-      } catch (err) {
-        console.warn('Erreur ouverture WhatsApp:', err);
+    try {
+      const newOrder = await addManualOrder({
+        clientRequestId: attempt.clientRequestId,
+        accessToken: attempt.accessToken,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        type: orderType,
+        status: initialStatus,
+        source,
+        paymentMethod,
+        driverName: orderType === 'delivery' && driverName.trim() ? driverName.trim() : undefined,
+        driverFee: orderType === 'delivery' && feeNum !== undefined ? feeNum : undefined,
+        items: selectedItems,
+        deliveryFee: effectiveDeliveryFee,
+        deliveryAddress:
+          orderType === 'delivery'
+            ? {
+                wilaya: 'Alger',
+                commune: commune.trim() || 'Birkhadem',
+                address: address.trim(),
+                landmark: landmark.trim() || undefined,
+                mapUrl: mapUrl.trim() || undefined,
+              }
+            : undefined,
+        pickupTimeSlot: slot,
+        kitchenNotes: kitchenNotes.trim() || undefined,
+        sentToWhatsApp,
+        sentAt: sentToWhatsApp ? nowIso : undefined,
+      });
+
+      if (!newOrder) {
+        throw new Error(
+          isArabic
+            ? 'لم يتم تأكيد الطلب من طرف الخادم.'
+            : 'La confirmation du serveur n’a pas été reçue.'
+        );
       }
-    }
 
-    onClose();
+      clearManualOrderAttempt();
+
+      if (action === 'create_and_whatsapp') {
+        // Trigger WhatsApp open
+        try {
+          sendToWhatsApp(newOrder);
+        } catch (err) {
+          console.warn('Erreur ouverture WhatsApp:', err);
+        }
+      }
+
+      onClose();
+    } catch (err: any) {
+      setFailedAction(action);
+      setErrorMsg(
+        isArabic
+          ? 'فشل إرسال الطلب إلى قاعدة البيانات. تم الاحتفاظ بالمعلومات، تحقق من الاتصال ثم أعد المحاولة.'
+          : (err?.message || 'L’envoi de la commande a échoué. Les informations sont conservées, vérifiez la connexion puis réessayez.')
+      );
+    } finally {
+      submitLockRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -262,8 +373,18 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 text-xs">
           {errorMsg && (
-            <div className="p-2.5 bg-red-950/60 border border-red-500/40 text-red-300 rounded-xl font-medium animate-fadeIn">
-              ⚠️ {errorMsg}
+            <div className="p-2.5 bg-red-950/60 border border-red-500/40 text-red-300 rounded-xl font-medium animate-fadeIn flex items-center gap-2">
+              <span className="flex-1">⚠️ {errorMsg}</span>
+              {failedAction && (
+                <button
+                  type="button"
+                  onClick={() => void handleCreateOrder(failedAction)}
+                  disabled={isSubmitting}
+                  className="shrink-0 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-black transition active:scale-95"
+                >
+                  {isArabic ? 'إعادة المحاولة' : 'Réessayer'}
+                </button>
+              )}
             </div>
           )}
 
@@ -702,30 +823,33 @@ export const ManualOrderModal: React.FC<ManualOrderModalProps> = ({ onClose }) =
             {/* 1. Bouton "Créer" -> Statut En attente */}
             <button
               type="button"
-              onClick={() => handleCreateOrder('create')}
-              className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-xl font-bold text-xs transition"
+              onClick={() => void handleCreateOrder('create')}
+              disabled={isSubmitting}
+              className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-wait text-zinc-200 border border-zinc-700 rounded-xl font-bold text-xs transition"
             >
-              {isArabic ? 'إنشاء (في الانتظار)' : 'Créer'}
+              {isSubmitting ? (isArabic ? 'جارٍ الإرسال...' : 'Envoi...') : failedAction === 'create' ? (isArabic ? 'إعادة المحاولة' : 'Réessayer') : (isArabic ? 'إنشاء (في الانتظار)' : 'Créer')}
             </button>
 
             {/* 3. Bouton "Créer et marquer prête" -> Statut Prête directement */}
             <button
               type="button"
-              onClick={() => handleCreateOrder('create_and_accept')}
-              className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 border border-amber-500/40 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
+              onClick={() => void handleCreateOrder('create_and_accept')}
+              disabled={isSubmitting}
+              className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-wait text-amber-400 border border-amber-500/40 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
             >
-              <Check className="w-3.5 h-3.5" />
-              <span>{isArabic ? 'إنشاء (جاهزة)' : 'Créer (Prête)'}</span>
+              {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              <span>{isSubmitting ? (isArabic ? 'جارٍ الإرسال...' : 'Envoi...') : failedAction === 'create_and_accept' ? (isArabic ? 'إعادة المحاولة' : 'Réessayer') : (isArabic ? 'إنشاء (جاهزة)' : 'Créer (Prête)')}</span>
             </button>
 
             {/* 2. Bouton PRINCIPAL "Créer et envoyer au groupe" -> Crée + ouvre WhatsApp */}
             <button
               type="button"
-              onClick={() => handleCreateOrder('create_and_whatsapp')}
-              className="px-4 py-2 bg-gradient-to-r from-orange-600 via-amber-600 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-orange-950/40 flex items-center gap-1.5 transition active:scale-95"
+              onClick={() => void handleCreateOrder('create_and_whatsapp')}
+              disabled={isSubmitting}
+              className="px-4 py-2 bg-gradient-to-r from-orange-600 via-amber-600 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 disabled:opacity-60 disabled:cursor-wait text-white font-bold text-xs rounded-xl shadow-lg shadow-orange-950/40 flex items-center gap-1.5 transition active:scale-95"
             >
-              <MessageCircle className="w-4 h-4 text-emerald-300" />
-              <span>{isArabic ? 'إنشاء وإرسال للمجموعة' : 'Créer et envoyer au groupe'}</span>
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4 text-emerald-300" />}
+              <span>{isSubmitting ? (isArabic ? 'جارٍ الإرسال...' : 'Envoi en cours...') : failedAction === 'create_and_whatsapp' ? (isArabic ? 'إعادة المحاولة' : 'Réessayer') : (isArabic ? 'إنشاء وإرسال للمجموعة' : 'Créer et envoyer au groupe')}</span>
             </button>
           </div>
         </div>

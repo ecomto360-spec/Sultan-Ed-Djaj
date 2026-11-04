@@ -224,6 +224,11 @@ export const OrdersKanban: React.FC<OrdersKanbanProps> = ({
                             <span className="text-xs font-extrabold text-amber-700 dark:text-amber-400 font-mono">
                               {order.orderNumber}
                             </span>
+                            {order.isNewAlert && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-red-600 text-white shadow-sm animate-pulse">
+                                {isArabic ? 'جديد' : 'Nouvelle'}
+                              </span>
+                            )}
                             <span
                               className={`px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 ${
                                 order.type === 'delivery'

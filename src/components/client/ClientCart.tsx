@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { OrderType } from '../../types';
@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Clock,
   MessageSquare,
+  Loader2,
 } from 'lucide-react';
 
 interface SavedAddress {
@@ -60,6 +61,10 @@ export const ClientCart: React.FC = () => {
   });
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitFailed, setSubmitFailed] = useState(false);
+  const [confirmedOrderNumber, setConfirmedOrderNumber] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   const deliveryFee = orderType === 'delivery' ? settings.deliveryFee : 0;
   const grandTotal = cartTotal + deliveryFee;
@@ -73,8 +78,79 @@ export const ClientCart: React.FC = () => {
     'Ce soir (19h30 - 21h00)',
   ];
 
-  const handleConfirmOrder = () => {
+  const createUuid = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
+      const random = Math.floor(Math.random() * 16);
+      const value = char === 'x' ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  };
+
+  const getCheckoutAttempt = () => {
+    const fingerprint = JSON.stringify({
+      cart,
+      orderType,
+      selectedAddress,
+      pickupTimeSlot,
+      kitchenNotes: kitchenNotes.trim(),
+      customerId: currentCustomer?.id,
+      customerPhone: currentCustomer?.phone,
+    });
+    const storageKey = 'sultan_checkout_attempt_v1';
+
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          parsed?.fingerprint === fingerprint &&
+          parsed?.clientRequestId &&
+          parsed?.accessToken
+        ) {
+          return {
+            clientRequestId: parsed.clientRequestId as string,
+            accessToken: parsed.accessToken as string,
+          };
+        }
+      }
+    } catch {
+      // Un nouvel identifiant en mémoire reste préférable à un blocage.
+    }
+
+    const attempt = {
+      fingerprint,
+      clientRequestId: createUuid(),
+      accessToken: `${createUuid()}${createUuid()}`,
+    };
+
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(attempt));
+    } catch {
+      // ignore
+    }
+
+    return {
+      clientRequestId: attempt.clientRequestId,
+      accessToken: attempt.accessToken,
+    };
+  };
+
+  const clearCheckoutAttempt = () => {
+    try {
+      sessionStorage.removeItem('sultan_checkout_attempt_v1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleConfirmOrder = async () => {
+    if (submitLockRef.current) return;
+
     setFormError(null);
+    setSubmitFailed(false);
 
     if (!isStoreActuallyOpen) {
       setFormError(t.storeClosedCannotOrder);
@@ -92,31 +168,86 @@ export const ClientCart: React.FC = () => {
       return;
     }
 
-    const order = placeOrder({
-      type: orderType,
-      deliveryAddress:
-        orderType === 'delivery'
-          ? {
-              wilaya: selectedAddress.wilaya || 'Alger',
-              commune: selectedAddress.commune || 'Birkhadem',
-              address: selectedAddress.address,
-              landmark: selectedAddress.landmark,
-              mapUrl:
-                selectedAddress.latitude && selectedAddress.longitude
-                  ? `https://maps.google.com/?q=${selectedAddress.latitude},${selectedAddress.longitude}`
-                  : undefined,
-              latitude: selectedAddress.latitude,
-              longitude: selectedAddress.longitude,
-            }
-          : undefined,
-      pickupTimeSlot: orderType === 'pickup' ? pickupTimeSlot : undefined,
-      kitchenNotes: kitchenNotes.trim() || undefined,
-    });
+    const attempt = getCheckoutAttempt();
+    const itemsSnapshot = [...cart];
 
-    if (order) {
-      setClientTab('tracking');
+    submitLockRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      const order = await placeOrder({
+        type: orderType,
+        items: itemsSnapshot,
+        clientRequestId: attempt.clientRequestId,
+        accessToken: attempt.accessToken,
+        deliveryAddress:
+          orderType === 'delivery'
+            ? {
+                wilaya: selectedAddress.wilaya || 'Alger',
+                commune: selectedAddress.commune || 'Birkhadem',
+                address: selectedAddress.address,
+                landmark: selectedAddress.landmark,
+                mapUrl:
+                  selectedAddress.latitude && selectedAddress.longitude
+                    ? `https://maps.google.com/?q=${selectedAddress.latitude},${selectedAddress.longitude}`
+                    : undefined,
+                latitude: selectedAddress.latitude,
+                longitude: selectedAddress.longitude,
+              }
+            : undefined,
+        pickupTimeSlot: orderType === 'pickup' ? pickupTimeSlot : undefined,
+        kitchenNotes: kitchenNotes.trim() || undefined,
+      });
+
+      if (!order) {
+        throw new Error(
+          isArabic
+            ? 'لم يتم تأكيد الطلب من طرف الخادم.'
+            : 'La confirmation du serveur n’a pas été reçue.'
+        );
+      }
+
+      clearCheckoutAttempt();
+      setConfirmedOrderNumber(order.orderNumber);
+    } catch (err: any) {
+      setSubmitFailed(true);
+      setFormError(
+        isArabic
+          ? 'فشل إرسال الطلب. تم الاحتفاظ بسلة المشتريات، يرجى التحقق من الاتصال ثم إعادة المحاولة.'
+          : (err?.message || 'L’envoi de la commande a échoué. Votre panier est conservé, vérifiez votre connexion puis réessayez.')
+      );
+    } finally {
+      submitLockRef.current = false;
+      setIsSubmitting(false);
     }
   };
+
+  if (confirmedOrderNumber) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
+        <div className="w-16 h-16 rounded-3xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-inner">
+          <CheckCircle2 className="w-8 h-8" />
+        </div>
+        <div className="space-y-1">
+          <h3 className="text-base font-black text-zinc-900 dark:text-zinc-100">
+            {isArabic ? 'تم تأكيد الطلب' : 'Commande confirmée'}
+          </h3>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            {isArabic ? 'رقم الطلب :' : 'Numéro de commande :'}
+          </p>
+          <p className="text-lg font-black text-orange-600 dark:text-orange-400 font-mono">
+            {confirmedOrderNumber}
+          </p>
+        </div>
+        <button
+          onClick={() => setClientTab('tracking')}
+          className="px-6 py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-black rounded-2xl shadow-md shadow-orange-950/20 transition active:scale-95"
+        >
+          {isArabic ? 'تابع طلبي' : 'Suivre ma commande'}
+        </button>
+      </div>
+    );
+  }
 
   if (cart.length === 0) {
     return (
@@ -320,18 +451,38 @@ export const ClientCart: React.FC = () => {
       {formError && (
         <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-500/30 text-red-800 dark:text-red-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
-          <span>{formError}</span>
+          <span className="flex-1">{formError}</span>
+          {submitFailed && (
+            <button
+              type="button"
+              onClick={() => void handleConfirmOrder()}
+              disabled={isSubmitting || !isStoreActuallyOpen}
+              className="shrink-0 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-black transition active:scale-95"
+            >
+              {isArabic ? 'إعادة المحاولة' : 'Réessayer'}
+            </button>
+          )}
         </div>
       )}
 
       {/* Place Order Button */}
       <button
         type="button"
-        onClick={handleConfirmOrder}
-        className="w-full h-13 rounded-2xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-orange-950/30 transition active:scale-[0.98] cursor-pointer"
+        onClick={() => void handleConfirmOrder()}
+        disabled={isSubmitting}
+        className="w-full h-13 rounded-2xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 disabled:opacity-60 disabled:cursor-wait text-white font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-orange-950/30 transition active:scale-[0.98] cursor-pointer"
       >
-        <span>{isArabic ? 'تأكيد وإرسال الطلب' : 'Valider la commande'}</span>
-        <ArrowRight className={`w-4 h-4 ${isArabic ? 'rotate-180' : ''}`} />
+        {isSubmitting ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>{isArabic ? 'جارٍ الإرسال...' : 'Envoi en cours...'}</span>
+          </>
+        ) : (
+          <>
+            <span>{submitFailed ? (isArabic ? 'إعادة المحاولة' : 'Réessayer') : (isArabic ? 'تأكيد وإرسال الطلب' : 'Valider la commande')}</span>
+            <ArrowRight className={`w-4 h-4 ${isArabic ? 'rotate-180' : ''}`} />
+          </>
+        )}
       </button>
     </div>
   );
