@@ -701,11 +701,32 @@ export async function updateOrder(id, body) {
 
   let path = `/rest/v1/orders?select=*&id=eq.${encodeURIComponent(id)}`;
   if (body?.expectedUpdatedAt) {
-    const expectedDate = new Date(body.expectedUpdatedAt);
-    if (Number.isNaN(expectedDate.getTime())) {
+    const expectedRaw = String(body.expectedUpdatedAt).trim();
+    const expectedDate = new Date(expectedRaw);
+    const existingRaw = String(existing.updated_at || '');
+    const existingDate = new Date(existingRaw);
+    if (Number.isNaN(expectedDate.getTime()) || Number.isNaN(existingDate.getTime())) {
       throw new ApiError(400, 'expectedUpdatedAt invalide.', 'VALIDATION_ERROR');
     }
-    path += `&updated_at=eq.${encodeURIComponent(expectedDate.toISOString())}`;
+    if (expectedDate.getTime() !== existingDate.getTime()) {
+      throw new ApiError(
+        409,
+        'La commande a été modifiée entre-temps. Actualisez puis réessayez.',
+        'ORDER_VERSION_CONFLICT'
+      );
+    }
+
+    // Postgres conserve les microsecondes (ex. .587387), alors que Date
+    // limite la précision aux millisecondes (.587). Convertir la valeur
+    // attendue avec toISOString() rend donc le filtre eq incapable de
+    // retrouver la ligne. On conserve la précision transmise par le client
+    // lorsqu'elle existe ; sinon, on filtre avec la valeur exacte relue en
+    // base après avoir vérifié l'égalité à la milliseconde.
+    const fractionMatch = expectedRaw.match(/\.(\d+)(?:Z|[+-]\d{2}:?\d{2})?$/i);
+    const versionForFilter = fractionMatch && fractionMatch[1].length > 3
+      ? expectedRaw
+      : existingRaw;
+    path += `&updated_at=eq.${encodeURIComponent(versionForFilter)}`;
   }
 
   const rows = await supabaseRest(path, {
