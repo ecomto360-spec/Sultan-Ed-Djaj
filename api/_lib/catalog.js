@@ -1,7 +1,7 @@
-// Catalogue serveur de référence pour le recalcul des totaux.
-// Le navigateur envoie uniquement productId + quantity : les prix ci-dessous
-// font foi côté API. À mettre à jour en même temps que le catalogue produit
-// tant que le catalogue lui-même n'est pas migré dans la base partagée.
+// Catalogue serveur de secours pour le recalcul des totaux.
+// Le navigateur envoie uniquement productId + quantity. Dès que le catalogue
+// partagé Supabase est initialisé, ses prix font foi côté API ; la liste
+// ci-dessous ne sert qu'avant la première publication du gérant.
 export const SERVER_CATALOG = [
   { id: 'prod-1', nameFr: 'Poulet rôti', nameAr: 'دجاج محمر', price: 1300, isAvailable: true },
   { id: 'prod-2', nameFr: 'Poulet braisé sur charbon', nameAr: 'دجاج مشوي على الجمر', price: 1500, isAvailable: true },

@@ -102,9 +102,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
         {/* Product Image / Illustration Hero */}
         <div className="relative w-full aspect-[16/10] bg-zinc-100 dark:bg-zinc-950 flex items-center justify-center overflow-hidden border-b border-zinc-200 dark:border-zinc-800">
-          {product.imageUrl ? (
+          {(product.imageUrl || product.imageThumbUrl) ? (
             <img
-              src={product.imageUrl}
+              src={product.imageUrl || product.imageThumbUrl}
               alt={product.nameFr}
               className={`w-full h-full object-cover ${!isAvailable ? 'grayscale' : ''}`}
             />

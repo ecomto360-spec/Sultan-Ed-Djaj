@@ -320,9 +320,9 @@ export const CommercialCatalog: React.FC = () => {
                 >
                   {/* Top image area */}
                   <div className="relative aspect-square w-full rounded-t-2xl overflow-hidden bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center">
-                    {p.imageUrl ? (
+                    {(p.imageThumbUrl || p.imageUrl) ? (
                       <img
-                        src={p.imageUrl}
+                        src={p.imageThumbUrl || p.imageUrl}
                         alt={p.nameFr}
                         loading="lazy"
                         className={`w-full h-full object-cover transition duration-300 ${

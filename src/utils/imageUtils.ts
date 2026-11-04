@@ -156,7 +156,9 @@ export async function processAndUploadProductImage(
     console.warn('Server image upload notice, falling back to embedded WebP data URL:', err);
   }
 
-  // Safe fallback: Return compressed WebP data URLs directly (fully supported and persistent in localStorage/JSON)
+  // Safe fallback: keep the compressed WebP data URL in the form. When the
+  // product is saved, /api/catalog migrates it to Supabase Storage so the
+  // photo is still shared with customers instead of staying browser-local.
   return {
     imageUrl: largeWebp,
     imageThumbUrl: thumbWebp,

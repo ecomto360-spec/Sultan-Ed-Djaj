@@ -357,7 +357,43 @@ function cleanAddress(rawAddress, dbType) {
   return Object.fromEntries(Object.entries(cleaned).filter(([, value]) => value !== undefined && value !== ''));
 }
 
-function cleanItems(rawItems) {
+function normalizeSharedOrderProduct(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.isArchived) return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim().slice(0, 120) : '';
+  const price = Number(raw.price);
+  if (!id || !Number.isFinite(price) || price < 0 || price > 10_000_000) return null;
+  return {
+    id,
+    nameFr: typeof raw.nameFr === 'string' && raw.nameFr.trim() ? raw.nameFr.trim().slice(0, 180) : id,
+    nameAr: typeof raw.nameAr === 'string' ? raw.nameAr.trim().slice(0, 180) : '',
+    price: Math.round(price * 100) / 100,
+    isAvailable: raw.isAvailable !== false,
+  };
+}
+
+async function getOrderCatalogById() {
+  try {
+    const rows = await supabaseRest(
+      '/rest/v1/catalog_state?select=products,version&singleton=eq.true&limit=1'
+    );
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (row && Number(row.version) > 0 && Array.isArray(row.products)) {
+      const dynamicCatalog = new Map();
+      for (const rawProduct of row.products) {
+        const product = normalizeSharedOrderProduct(rawProduct);
+        if (product) dynamicCatalog.set(product.id, product);
+      }
+      if (dynamicCatalog.size > 0) return dynamicCatalog;
+    }
+  } catch (error) {
+    // Before the catalog migration/bootstrap, preserve the deployed static
+    // server catalog so order creation does not regress.
+    console.warn('[orders] Shared catalog unavailable, using static catalog:', error?.message || error);
+  }
+  return SERVER_CATALOG_BY_ID;
+}
+
+function cleanItems(rawItems, catalogById = SERVER_CATALOG_BY_ID) {
   if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 50) {
     throw new ApiError(400, 'La commande doit contenir entre 1 et 50 lignes.', 'VALIDATION_ERROR');
   }
@@ -365,7 +401,7 @@ function cleanItems(rawItems) {
   const merged = new Map();
   for (const rawItem of rawItems) {
     const productId = cleanString(rawItem?.productId, 'articles.productId', { required: true, max: 120 });
-    const product = SERVER_CATALOG_BY_ID.get(productId);
+    const product = catalogById.get(productId);
     if (!product || !product.isAvailable) {
       throw new ApiError(422, `Produit indisponible ou inconnu : ${productId}.`, 'UNKNOWN_PRODUCT');
     }
@@ -416,7 +452,7 @@ function defaultStatusNote(appStatus, isArabic) {
   return notes[appStatus] || 'Statut mis à jour';
 }
 
-export function buildOrderInsert(body, staffSession) {
+export async function buildOrderInsert(body, staffSession, catalogById) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new ApiError(400, 'Payload de commande invalide.', 'VALIDATION_ERROR');
   }
@@ -436,7 +472,8 @@ export function buildOrderInsert(body, staffSession) {
   const dbType = APP_TO_DB_TYPE[body.type || 'delivery'];
   if (!dbType) throw new ApiError(400, 'Type de commande invalide.', 'VALIDATION_ERROR');
 
-  const articles = cleanItems(body.items);
+  const orderCatalog = catalogById || await getOrderCatalogById();
+  const articles = cleanItems(body.items, orderCatalog);
   const subtotal = articles.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const deliveryFee = dbType === 'livraison'
@@ -572,7 +609,7 @@ async function fetchOrderRowByClientRequestId(clientRequestId) {
 }
 
 export async function createOrder(body, staffSession) {
-  const { insert, accessToken } = buildOrderInsert(body, staffSession);
+  const { insert, accessToken } = await buildOrderInsert(body, staffSession);
 
   const existingBeforeInsert = await fetchOrderRowByClientRequestId(insert.client_request_id);
   if (existingBeforeInsert) {

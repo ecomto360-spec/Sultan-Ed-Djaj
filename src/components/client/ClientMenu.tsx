@@ -262,9 +262,9 @@ export const ClientMenu: React.FC = () => {
 
                 {/* Product Image / Custom WebP or SVG Fallback */}
                 <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center mb-2 border border-zinc-100 dark:border-zinc-800">
-                  {product.imageUrl ? (
+                  {(product.imageThumbUrl || product.imageUrl) ? (
                     <img
-                      src={product.imageUrl}
+                      src={product.imageThumbUrl || product.imageUrl}
                       alt={product.nameFr}
                       loading="lazy"
                       className={`w-full h-full object-cover transition duration-300 ${

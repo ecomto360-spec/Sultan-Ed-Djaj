@@ -59,6 +59,11 @@ import {
   subscribeToOrderChanges,
   updateOrderRemote,
 } from '../services/orderService';
+import {
+  fetchCatalogRemote,
+  publishCatalogRemote,
+  type RemoteCatalogState,
+} from '../services/catalogService';
 import { sendToWhatsApp } from '../services/whatsappService';
 
 interface AppContextType {
@@ -417,6 +422,21 @@ function migrateStorageIfNeeded() {
   }
 }
 
+function safeLocalStorageSet(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    // Product photos used to be stored as large data URLs and could exceed the
+    // browser quota. Never let that cache failure break the live application:
+    // the shared Supabase catalog remains the source of truth.
+    console.warn(`Local cache unavailable for ${key}:`, err);
+  }
+}
+
+function makeCatalogSnapshot(products: Product[], categories: ProductCategoryItem[]) {
+  return JSON.stringify({ products, categories });
+}
+
 // Execute migration
 migrateStorageIfNeeded();
 
@@ -652,12 +672,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const remoteOrdersLoadedRef = useRef<boolean>(false);
   const ordersRefreshInFlightRef = useRef<boolean>(false);
   const ordersRefreshPendingRef = useRef<boolean>(false);
+  const productsRef = useRef<Product[]>(products);
+  const categoriesRef = useRef<ProductCategoryItem[]>(categories);
+  const catalogVersionRef = useRef<number>(0);
+  const catalogInitializedRef = useRef<boolean>(false);
+  const catalogSyncReadyRef = useRef<boolean>(false);
+  const catalogSnapshotRef = useRef<string | null>(null);
+  const catalogRefreshInFlightRef = useRef<boolean>(false);
+  const catalogRefreshPendingRef = useRef<boolean>(false);
+  const catalogPublishInFlightRef = useRef<boolean>(false);
+  const catalogPublishPendingRef = useRef<boolean>(false);
   const soundEnabledRef = useRef<boolean>(settings.soundEnabled);
   const currentDayRef = useRef<Day | null>(null);
 
   useEffect(() => {
     soundEnabledRef.current = settings.soundEnabled;
   }, [settings.soundEnabled]);
+
+  useEffect(() => {
+    productsRef.current = products;
+  }, [products]);
+
+  useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
 
   // Recompute days stats reactively:
   // Pour la journée ouverte : calcule tout depuis les commandes (aucun compteur stocké figé).
@@ -1087,7 +1125,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Sync to localStorage
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+    safeLocalStorageSet(STORAGE_KEYS.PRODUCTS, products);
   }, [products]);
 
   useEffect(() => {
@@ -1155,7 +1193,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [clientActiveOrderId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+    safeLocalStorageSet(STORAGE_KEYS.CATEGORIES, categories);
   }, [categories]);
 
   useEffect(() => {
@@ -1170,6 +1208,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Supabase (via /api/orders) est désormais leur seule source partagée.
     remoteState = { ...remoteState };
     delete remoteState.orders;
+
+    // Supabase (/api/catalog) is authoritative for products/categories once
+    // that endpoint is reachable; never let the legacy state file replace
+    // the shared catalog (or its product photos) afterwards.
+    if (catalogSyncReadyRef.current) {
+      delete remoteState.products;
+      delete remoteState.categories;
+    }
 
     isRemoteUpdateRef.current = true;
     try {
@@ -1272,8 +1318,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Push local state changes to the server via HTTP REST (Authenticated for admin)
-  const pushPatchToServer = (patch: Record<string, any>, resetAll = false) => {
+  const pushPatchToServer = (initialPatch: Record<string, any>, resetAll = false) => {
     if (!getAdminToken()) return;
+    const patch = { ...initialPatch };
+    if (catalogSyncReadyRef.current) {
+      // Products/categories are published through /api/catalog instead.
+      delete patch.products;
+      delete patch.categories;
+      if (!resetAll && Object.keys(patch).length === 0) return;
+    }
     try {
       authFetch('/api/state', {
         method: 'POST',
@@ -1291,6 +1344,157 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // Ignore network errors when offline
     }
   };
+
+  const applyRemoteCatalog = useCallback((catalog: RemoteCatalogState) => {
+    catalogSyncReadyRef.current = true;
+
+    if (!catalog.initialized) {
+      catalogVersionRef.current = 0;
+      catalogInitializedRef.current = false;
+      catalogSnapshotRef.current = null;
+      return;
+    }
+
+    const previousVersion = catalogVersionRef.current;
+    const localSnapshot = makeCatalogSnapshot(productsRef.current, categoriesRef.current);
+    const hasUnpublishedLocalChange = Boolean(
+      getAdminToken() &&
+      catalogSnapshotRef.current &&
+      localSnapshot !== catalogSnapshotRef.current
+    );
+    if (hasUnpublishedLocalChange && catalog.version <= previousVersion) {
+      // A poll that started before a staff edit must not erase that edit
+      // while its debounced publication is still pending.
+      return;
+    }
+
+    catalogVersionRef.current = catalog.version;
+    catalogInitializedRef.current = true;
+    if (catalog.unchanged) return;
+
+    catalogSnapshotRef.current = makeCatalogSnapshot(catalog.products, catalog.categories);
+    productsRef.current = catalog.products;
+    categoriesRef.current = catalog.categories;
+    isRemoteUpdateRef.current = true;
+    try {
+      setProducts(prev =>
+        JSON.stringify(prev) === JSON.stringify(catalog.products) ? prev : catalog.products
+      );
+      setCategories(prev =>
+        JSON.stringify(prev) === JSON.stringify(catalog.categories) ? prev : catalog.categories
+      );
+    } finally {
+      setTimeout(() => {
+        isRemoteUpdateRef.current = false;
+      }, 60);
+    }
+  }, []);
+
+  const publishCatalogToSupabase = useCallback(async (
+    nextProducts: Product[] = productsRef.current,
+    nextCategories: ProductCategoryItem[] = categoriesRef.current
+  ) => {
+    if (!getAdminToken() || !catalogSyncReadyRef.current) return;
+
+    const requestSnapshot = makeCatalogSnapshot(nextProducts, nextCategories);
+    if (requestSnapshot === catalogSnapshotRef.current) return;
+
+    if (catalogPublishInFlightRef.current) {
+      catalogPublishPendingRef.current = true;
+      return;
+    }
+    catalogPublishInFlightRef.current = true;
+
+    try {
+      const saved = await publishCatalogRemote({
+        products: nextProducts,
+        categories: nextCategories,
+        expectedVersion: catalogVersionRef.current,
+      });
+      if (!saved?.initialized) return;
+
+      const currentSnapshot = makeCatalogSnapshot(productsRef.current, categoriesRef.current);
+      if (currentSnapshot === requestSnapshot) {
+        // The API may have replaced local data URLs with public Supabase
+        // Storage URLs; applying its response makes every screen use them.
+        applyRemoteCatalog(saved);
+      } else {
+        catalogVersionRef.current = saved.version;
+        catalogInitializedRef.current = true;
+        catalogSyncReadyRef.current = true;
+        catalogSnapshotRef.current = makeCatalogSnapshot(saved.products, saved.categories);
+        catalogPublishPendingRef.current = true;
+      }
+    } catch (err: any) {
+      if (err?.status === 409) {
+        // Another staff screen published first. Force the next short poll to
+        // reload the full authoritative catalog instead of retrying stale data.
+        catalogInitializedRef.current = false;
+        catalogVersionRef.current = 0;
+        catalogSnapshotRef.current = null;
+        catalogSyncReadyRef.current = false;
+      }
+      console.warn('Catalog publication failed:', err);
+    } finally {
+      catalogPublishInFlightRef.current = false;
+      if (catalogPublishPendingRef.current) {
+        catalogPublishPendingRef.current = false;
+        void publishCatalogToSupabase(productsRef.current, categoriesRef.current);
+      }
+    }
+  }, [applyRemoteCatalog]);
+
+  const refreshCatalogFromSupabase = useCallback(async () => {
+    if (catalogRefreshInFlightRef.current) {
+      catalogRefreshPendingRef.current = true;
+      return;
+    }
+    catalogRefreshInFlightRef.current = true;
+
+    try {
+      const remote = await fetchCatalogRemote(
+        catalogInitializedRef.current ? catalogVersionRef.current : undefined
+      );
+      catalogSyncReadyRef.current = true;
+
+      if (remote.initialized) {
+        applyRemoteCatalog(remote);
+      } else {
+        catalogVersionRef.current = 0;
+        catalogInitializedRef.current = false;
+        catalogSnapshotRef.current = null;
+
+        // One-time bootstrap: only a Manager browser may turn its current
+        // local catalog into the first shared catalog. Requiring at least
+        // one already-imported product photo prevents a second, seed-only
+        // Manager browser from winning the race and replacing the photos
+        // held by the browser used to import them. A later explicit product
+        // or category edit can still perform the first publication.
+        const hasImportedProductImage = productsRef.current.some(
+          product => Boolean(product.imageUrl || product.imageThumbUrl)
+        );
+        if (
+          getAdminToken() &&
+          getStoredAdminRole() === 'gerant' &&
+          hasImportedProductImage
+        ) {
+          void publishCatalogToSupabase(productsRef.current, categoriesRef.current);
+        }
+      }
+    } catch (err: any) {
+      // Before the SQL migration, or while offline, keep the local/seed
+      // catalog visible and let the next poll retry automatically.
+      if (err?.status !== 404) {
+        console.warn('Catalog synchronization failed:', err);
+      }
+    } finally {
+      catalogRefreshInFlightRef.current = false;
+      if (catalogRefreshPendingRef.current) {
+        catalogRefreshPendingRef.current = false;
+        void refreshCatalogFromSupabase();
+      }
+    }
+  }, [applyRemoteCatalog, publishCatalogToSupabase]);
 
   const normalizeRemoteOrderForCurrentDay = (order: Order): Order => {
     const day = currentDayRef.current;
@@ -1509,6 +1713,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       unsubscribe();
     };
   }, [clientActiveOrderId, authenticatedRole, userRole, refreshOrdersFromSupabase]);
+
+  // Catalogue partagé Supabase : chargement public pour les clients, bootstrap
+  // unique depuis le navigateur Gérant, puis polling léger par version. Une
+  // photo publiée par le gérant apparaît donc aussi dans un autre navigateur
+  // ou sur un autre appareil, sans dépendre de son localStorage.
+  useEffect(() => {
+    let isMounted = true;
+
+    const refresh = () => {
+      if (isMounted) void refreshCatalogFromSupabase();
+    };
+
+    refresh();
+    const pollInterval = setInterval(refresh, 2000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [authenticatedRole, userRole, refreshCatalogFromSupabase]);
+
+  // Publier automatiquement produits/catégories dès qu'un écran staff les
+  // modifie. Le snapshot empêche l'écho lorsqu'on vient d'appliquer la
+  // version distante; le serveur limite en plus les non-gérants au stock.
+  useEffect(() => {
+    if (!catalogSyncReadyRef.current || !getAdminToken()) return;
+    const snapshot = makeCatalogSnapshot(products, categories);
+    if (snapshot === catalogSnapshotRef.current) return;
+
+    const timer = setTimeout(() => {
+      void publishCatalogToSupabase(products, categories);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [products, categories, publishCatalogToSupabase]);
 
   // Automatically sync general state changes to server when modified locally (Admin only)
   useEffect(() => {
@@ -3045,7 +3291,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         registerOrLoginCustomer,
         logoutCustomer,
         refreshSync: async () => {
-          await Promise.allSettled([refreshRemoteState(), refreshOrdersFromSupabase()]);
+          await Promise.allSettled([
+            refreshRemoteState(),
+            refreshOrdersFromSupabase(),
+            refreshCatalogFromSupabase(),
+          ]);
         },
       }}
     >

@@ -100,6 +100,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({
       setNewOptionNameFr('');
       setNewOptionPrice(100);
       setImageError(null);
+      setIsUploadingImage(false);
       setFormError(null);
     }
   }, [isOpen, product, categories]);
@@ -110,7 +111,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({
     setImageError(null);
     setIsUploadingImage(true);
     try {
-      const res = await processAndUploadProductImage(file);
+      const res = await processAndUploadProductImage(file, product?.id || 'prod-new');
       if (!res || !res.imageUrl) {
         setImageError('Erreur lors du traitement de l\'image');
       } else {
@@ -151,6 +152,10 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({
     e.preventDefault();
     setFormError(null);
 
+    if (isUploadingImage) {
+      setFormError('Veuillez attendre la fin de l’envoi de la photo avant de publier le produit.');
+      return;
+    }
     if (!nameFr.trim()) {
       setFormError('Le nom en français est obligatoire.');
       return;
@@ -639,9 +644,14 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            className="min-h-[44px] px-6 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-md transition active:scale-95"
+            disabled={isUploadingImage}
+            className="min-h-[44px] px-6 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-md transition active:scale-95 disabled:opacity-50 disabled:active:scale-100"
           >
-            {product ? 'Mettre à jour le produit' : 'Créer et publier le produit'}
+            {isUploadingImage
+              ? 'Envoi de la photo...'
+              : product
+                ? 'Mettre à jour le produit'
+                : 'Créer et publier le produit'}
           </button>
         </div>
       </div>
