@@ -133,13 +133,26 @@ export async function loginAdminByPin(pin: string, rememberMe = false): Promise<
       body: JSON.stringify({ pin: cleanPin }),
     });
 
-    const data = await res.json();
+    const responseText = await res.text();
+    let data: any = null;
+
+    try {
+      data = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      data = null;
+    }
 
     if (!res.ok) {
-      const err: any = new Error(data?.error || 'Code PIN incorrect');
+      const message = data?.error
+        || (data ? 'Code PIN incorrect' : `Service d'authentification indisponible (HTTP ${res.status}).`);
+      const err: any = new Error(message);
       err.retryAfter = data?.retryAfter;
       err.status = res.status;
       throw err;
+    }
+
+    if (!data?.token || !data?.role) {
+      throw new Error("Réponse d'authentification invalide.");
     }
 
     setAdminToken(data.token, data.role, rememberMe);
