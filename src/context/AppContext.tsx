@@ -55,6 +55,7 @@ import {
   createOrderRemote,
   fetchOrderRemote,
   fetchOrdersRemote,
+  fetchMyOrdersRemote,
   isRemoteOrderId,
   subscribeToOrderChanges,
   updateOrderRemote,
@@ -64,7 +65,85 @@ import {
   publishCatalogRemote,
   type RemoteCatalogState,
 } from '../services/catalogService';
+import { getDeviceId } from '../services/deviceService';
+import {
+  eraseMyProfile,
+  fetchMyProfile,
+  recoverMyProfile,
+  readCachedProfile,
+  saveMyProfile,
+  writeCachedProfile,
+  type CustomerProfile,
+  type CustomerProfileInput,
+} from '../services/customerService';
 import { sendToWhatsApp } from '../services/whatsappService';
+
+// ─── Réglages & alertes client ──────────────────────────────────────────────
+
+export type ClientStatusKey = 'preparing' | 'ready' | 'delivering' | 'delivered' | 'cancelled';
+
+export interface ClientNotificationSettings {
+  soundsEnabled: boolean;
+  statusTexts: {
+    fr?: Partial<Record<ClientStatusKey, string>>;
+    ar?: Partial<Record<ClientStatusKey, string>>;
+  };
+}
+
+export interface ClientToastState {
+  orderId: string;
+  statusKey: ClientStatusKey;
+  message: string;
+  tone: 'info' | 'success' | 'alert';
+  reason?: string;
+}
+
+const DEFAULT_CLIENT_STATUS_TEXTS: Record<'fr' | 'ar', Record<ClientStatusKey, string>> = {
+  fr: {
+    preparing: 'Votre commande est en préparation 👨‍🍳',
+    ready: 'Votre commande est prête ✅',
+    delivering: 'Votre commande est en livraison 🛵',
+    delivered: 'Votre commande a été livrée 🎉',
+    cancelled: 'Votre commande a été annulée ❌',
+  },
+  ar: {
+    preparing: 'طلبك قيد التحضير 👨‍🍳',
+    ready: 'طلبك جاهز ✅',
+    delivering: 'طلبك في الطريق 🛵',
+    delivered: 'تم تسليم طلبك 🎉',
+    cancelled: 'تم إلغاء طلبك ❌',
+  },
+};
+
+const CLIENT_UNSEEN_KEY = 'sultan_unseen_orders_v1';
+
+function clientStatusKeyForOrder(order: Order): ClientStatusKey | null {
+  if (order.status === 'cancelled') return 'cancelled';
+  if (order.status === 'delivered') return 'delivered';
+  if (order.status === 'ready') {
+    return order.type === 'delivery' && order.driverName ? 'delivering' : 'ready';
+  }
+  if (order.status === 'preparing') return 'preparing';
+  return null;
+}
+
+function mapProfileToCustomer(profile: CustomerProfile): Customer {
+  return {
+    id: profile.id,
+    name: profile.name,
+    phone: profile.phone,
+    wilaya: profile.wilaya || 'Alger',
+    commune: profile.commune || 'Birkhadem',
+    address: profile.address || '',
+    landmark: profile.landmark || undefined,
+    mapUrl: profile.mapUrl || undefined,
+    latitude: profile.latitude ?? undefined,
+    longitude: profile.longitude ?? undefined,
+    orderCount: Number(profile.orderCount || 0),
+    totalSpent: Number(profile.totalSpent || 0),
+    createdAt: profile.createdAt || new Date().toISOString(),
+  };
+}
 
 interface AppContextType {
   view: 'client' | 'commercial';
@@ -272,17 +351,24 @@ interface AppContextType {
   resetAllSeedData: () => void;
   resetToSeedData: () => void;
   reorderPastOrder: (order: Order) => void;
-  registerOrLoginCustomer: (data: {
-    name: string;
-    phone: string;
-    commune: string;
-    address: string;
-    landmark?: string;
-    mapUrl?: string;
-    latitude?: number;
-    longitude?: number;
-  }) => Customer;
-  logoutCustomer: () => void;
+  // Profil client de CET appareil (device_id) : créé au premier achat,
+  // récupérable par téléphone + code personnel, effaçable sur demande.
+  customerProfileLoading: boolean;
+  saveCustomerProfile: (data: CustomerProfileInput) => Promise<Customer>;
+  recoverCustomerProfile: (phone: string, code: string) => Promise<Customer>;
+  eraseCustomerProfile: () => Promise<void>;
+  customerHasRecoveryCode: boolean;
+
+  // Réglages client (Gérant) : sons et textes d'étape FR/AR diffusés aux
+  // navigateurs clients via /api/client-settings.
+  clientSettings: ClientNotificationSettings;
+  saveClientSettings: (next: Partial<ClientNotificationSettings>) => Promise<boolean>;
+
+  // Alertes de suivi client : toast + compteur « Mes commandes » non lues.
+  clientToast: ClientToastState | null;
+  dismissClientToast: () => void;
+  clientOrdersUnseen: string[];
+  clearClientOrdersUnseen: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -610,15 +696,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   });
 
+  // Profil client strictement lié à cet appareil (device_id). Plus aucune
+  // session partagée entre visiteurs ni client de démo : sans profil enregistré
+  // sur CET appareil, currentCustomer vaut null (formulaire vide au premier
+  // achat). La copie locale ne sert qu'à l'affichage instantané ; la source
+  // de vérité est /api/customers?deviceId=...
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_CUSTOMER);
-      const parsed = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS[0];
-      return (parsed && typeof parsed === 'object' && parsed.id) ? parsed : INITIAL_CUSTOMERS[0];
-    } catch {
-      return INITIAL_CUSTOMERS[0];
-    }
+    const cached = readCachedProfile();
+    return cached ? mapProfileToCustomer(cached) : null;
   });
+  const [customerProfileLoading, setCustomerProfileLoading] = useState<boolean>(true);
+  const [customerHasRecoveryCode, setCustomerHasRecoveryCode] = useState<boolean>(false);
 
   const [cart, setCart] = useState<OrderItem[]>(() => {
     try {
@@ -667,11 +755,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Track remote updates to prevent infinite SSE/REST echo loops
   const isRemoteUpdateRef = useRef<boolean>(false);
-  const sseRef = useRef<EventSource | null>(null);
   const serverVersionRef = useRef<number>(0);
   const remoteOrdersLoadedRef = useRef<boolean>(false);
   const ordersRefreshInFlightRef = useRef<boolean>(false);
   const ordersRefreshPendingRef = useRef<boolean>(false);
+  // Instantané des commandes pour arrêter le polling client une fois toutes
+  // les commandes de l'appareil livrées/annulées (sans recréer le callback).
+  const ordersSnapshotRef = useRef<Order[]>([]);
+  const clientSettingsRef = useRef<ClientNotificationSettings>({ soundsEnabled: true, statusTexts: {} });
+  const titleFlashTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const titleFlashStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productsRef = useRef<Product[]>(products);
   const categoriesRef = useRef<ProductCategoryItem[]>(categories);
   const catalogVersionRef = useRef<number>(0);
@@ -827,11 +920,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSettings(nextSettings);
     setStockItems(nextStock);
 
-    pushPatchToServer({
-      days: nextDays,
-      settings: nextSettings,
-      stockItems: nextStock,
-    });
+
 
     soundService.playSuccess();
     return newDay;
@@ -994,10 +1083,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // ignore
     }
 
-    pushPatchToServer({
-      days: nextDays,
-      cashClosings: nextCashClosings,
-    });
+
 
     soundService.playSuccess();
   };
@@ -1165,14 +1251,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [cashClosings]);
 
   useEffect(() => {
-    if (currentCustomer) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_CUSTOMER, JSON.stringify(currentCustomer));
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.CURRENT_CUSTOMER);
-    }
-  }, [currentCustomer]);
-
-  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify(cart));
   }, [cart]);
 
@@ -1199,151 +1277,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.CLIENT_PAGE, JSON.stringify(clientPageContent));
   }, [clientPageContent]);
-
-  // Apply authoritative state received from the server (WebSocket or REST polling)
-  const applyRemoteServerState = (remoteState: any) => {
-    if (!remoteState) return;
-
-    // Les commandes ne transitent plus par l'ancien état serveur/fichier JSON :
-    // Supabase (via /api/orders) est désormais leur seule source partagée.
-    remoteState = { ...remoteState };
-    delete remoteState.orders;
-
-    // Supabase (/api/catalog) is authoritative for products/categories once
-    // that endpoint is reachable; never let the legacy state file replace
-    // the shared catalog (or its product photos) afterwards.
-    if (catalogSyncReadyRef.current) {
-      delete remoteState.products;
-      delete remoteState.categories;
-    }
-
-    isRemoteUpdateRef.current = true;
-    try {
-      if (typeof remoteState.version === 'number') {
-        serverVersionRef.current = remoteState.version;
-      }
-
-      if (Array.isArray(remoteState.products)) {
-        setProducts(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.products)
-            ? prev
-            : remoteState.products
-        );
-      }
-
-      if (Array.isArray(remoteState.customers)) {
-        setCustomers(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.customers)
-            ? prev
-            : remoteState.customers
-        );
-      }
-
-      if (remoteState.settings) {
-        setSettings(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.settings)
-            ? prev
-            : remoteState.settings
-        );
-      }
-
-      if (Array.isArray(remoteState.stockItems)) {
-        setStockItems(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.stockItems)
-            ? prev
-            : remoteState.stockItems
-        );
-      }
-
-      if (Array.isArray(remoteState.compositions)) {
-        setCompositions(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.compositions)
-            ? prev
-            : remoteState.compositions
-        );
-      }
-
-      if (Array.isArray(remoteState.stockMovements)) {
-        setStockMovements(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.stockMovements)
-            ? prev
-            : remoteState.stockMovements
-        );
-      }
-
-      if (Array.isArray(remoteState.expenses)) {
-        setExpenses(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.expenses)
-            ? prev
-            : remoteState.expenses
-        );
-      }
-
-      if (Array.isArray(remoteState.cashClosings)) {
-        setCashClosings(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.cashClosings)
-            ? prev
-            : remoteState.cashClosings
-        );
-      }
-
-      if (Array.isArray(remoteState.days)) {
-        setDays(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.days)
-            ? prev
-            : remoteState.days
-        );
-      }
-
-      if (Array.isArray(remoteState.categories)) {
-        setCategories(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.categories)
-            ? prev
-            : remoteState.categories
-        );
-      }
-
-      if (remoteState.clientPageContent && typeof remoteState.clientPageContent === 'object') {
-        setClientPageContent(prev =>
-          JSON.stringify(prev) === JSON.stringify(remoteState.clientPageContent)
-            ? prev
-            : { ...INITIAL_CLIENT_PAGE_CONTENT, ...remoteState.clientPageContent }
-        );
-      }
-    } finally {
-      setTimeout(() => {
-        isRemoteUpdateRef.current = false;
-      }, 60);
-    }
-  };
-
-  // Push local state changes to the server via HTTP REST (Authenticated for admin)
-  const pushPatchToServer = (initialPatch: Record<string, any>, resetAll = false) => {
-    if (!getAdminToken()) return;
-    const patch = { ...initialPatch };
-    if (catalogSyncReadyRef.current) {
-      // Products/categories are published through /api/catalog instead.
-      delete patch.products;
-      delete patch.categories;
-      if (!resetAll && Object.keys(patch).length === 0) return;
-    }
-    try {
-      authFetch('/api/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patch, resetAll }),
-      })
-        .then(r => (r.ok ? r.json() : null))
-        .then(data => {
-          if (data && typeof data.version === 'number') {
-            serverVersionRef.current = data.version;
-          }
-        })
-        .catch(() => {});
-    } catch {
-      // Ignore network errors when offline
-    }
-  };
 
   const applyRemoteCatalog = useCallback((catalog: RemoteCatalogState) => {
     catalogSyncReadyRef.current = true;
@@ -1588,17 +1521,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       if (getAdminToken()) {
         incoming = await fetchOrdersRemote(500);
-      } else if (clientActiveOrderId && isRemoteOrderId(clientActiveOrderId)) {
-        incoming = [await fetchOrderRemote(clientActiveOrderId)];
       } else {
-        return;
+        // Client : « Mes commandes » de cet appareil (device_id). Le suivi
+        // s'arrête dès que toutes les commandes connues sont Livrée/Annulée ;
+        // la validation d'une nouvelle commande relance automatiquement.
+        if (
+          remoteOrdersLoadedRef.current &&
+          ordersSnapshotRef.current.length > 0 &&
+          ordersSnapshotRef.current.every(o => o.status === 'delivered' || o.status === 'cancelled')
+        ) {
+          return;
+        }
+
+        incoming = await fetchMyOrdersRemote(getDeviceId());
+        if (
+          clientActiveOrderId &&
+          isRemoteOrderId(clientActiveOrderId) &&
+          !incoming.some(o => o.id === clientActiveOrderId)
+        ) {
+          try {
+            incoming = [await fetchOrderRemote(clientActiveOrderId), ...incoming];
+          } catch {
+            // La commande active peut avoir été supprimée côté serveur.
+          }
+        }
       }
 
       mergeRemoteOrders(incoming);
       remoteOrdersLoadedRef.current = true;
     } catch (err) {
       // Le polling/Realtime réessaiera automatiquement ; après une coupure,
-      // la prochaine lecture complète rattrape toutes les commandes manquées.
+      // la prochaine lecture complète rattrapera toutes les commandes manquées.
       console.warn('Order synchronization failed:', err);
     } finally {
       ordersRefreshInFlightRef.current = false;
@@ -1609,79 +1562,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [clientActiveOrderId]);
 
-  // Explicit remote state fetch function (available for polling, order creation & manual refresh button)
-  const refreshRemoteState = useCallback(async () => {
-    try {
-      const adminToken = getAdminToken();
-      let url = '/api/state';
-      if (adminToken || userRole) {
-        const tokenParam = adminToken ? `token=${encodeURIComponent(adminToken)}&` : '';
-        url = `/api/state?${tokenParam}role=${encodeURIComponent(userRole || 'gerant')}`;
-      } else {
-        url = `/api/state?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
-      }
-
-      const res = await authFetch(url);
-      if (res.ok) {
-        const serverData = await res.json();
-        if (serverData) {
-          applyRemoteServerState(serverData);
-        }
-      }
-    } catch {
-      // Ignore network failures
-    }
-  }, [userRole, clientActiveOrderId]);
-
-  // Real-time multi-device Server-Sent Events (SSE) + automatic REST sync fallback (Smartphone <-> PC)
-  useEffect(() => {
-    let isMounted = true;
-
-    // 1. Initial REST fetch
-    refreshRemoteState();
-
-    // 2. Server-Sent Events (SSE) stream over standard HTTPS
-    if (typeof window !== 'undefined' && 'EventSource' in window) {
-      try {
-        const adminToken = getAdminToken();
-        const sseUrl = (adminToken || userRole)
-          ? `/api/stream?${adminToken ? `token=${encodeURIComponent(adminToken)}&` : ''}role=${encodeURIComponent(userRole || 'gerant')}`
-          : `/api/stream?orderIds=${encodeURIComponent(clientActiveOrderId || '')}`;
-        const es = new EventSource(sseUrl);
-        sseRef.current = es;
-        es.onmessage = event => {
-          if (!isMounted) return;
-          try {
-            const msg = JSON.parse(event.data);
-            if ((msg.type === 'sync:init' || msg.type === 'sync:update') && msg.state) {
-              applyRemoteServerState(msg.state);
-            }
-          } catch {
-            // ignore malformed message
-          }
-        };
-      } catch {
-        // Fallback to HTTP polling below
-      }
-    }
-
-    // 3. Fast periodic polling (every 2 seconds)
-    const pollInterval = setInterval(() => {
-      if (!isMounted) return;
-      refreshRemoteState();
-    }, 2000);
-
-    return () => {
-      isMounted = false;
-      clearInterval(pollInterval);
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
-    };
-  }, [userRole, clientActiveOrderId, refreshRemoteState]);
-
-  // Commandes partagées : Supabase Realtime + polling de secours toutes les 5 s.
+  // Commandes partagées : Supabase Realtime + polling de secours.
+  // Visible : 4 s ; onglet en arrière-plan : 10 s (économie batterie).
   // Le même mécanisme sert au rattrapage après retour du réseau.
   useEffect(() => {
     let isMounted = true;
@@ -1697,9 +1579,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       onChange: refresh,
     });
 
-    const pollInterval = setInterval(refresh, 5000);
+    let pollInterval = setInterval(refresh, 4000);
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') refresh();
+      if (document.visibilityState === 'visible') {
+        clearInterval(pollInterval);
+        pollInterval = setInterval(refresh, 4000);
+        refresh();
+      } else {
+        clearInterval(pollInterval);
+        pollInterval = setInterval(refresh, 10000);
+      }
     };
 
     window.addEventListener('online', refresh);
@@ -1756,36 +1645,304 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearTimeout(timer);
   }, [products, categories, publishCatalogToSupabase]);
 
-  // Automatically sync general state changes to server when modified locally (Admin only)
+  // ─── Profil client : identité par appareil (device_id) ─────────────────
+  // Instantané des commandes pour l'arrêt du polling client.
   useEffect(() => {
-    if (isRemoteUpdateRef.current || !getAdminToken()) return;
-    const timer = setTimeout(() => {
-      if (!isRemoteUpdateRef.current && getAdminToken()) {
-        pushPatchToServer({
-          products,
-          customers,
-          days: computedDays,
-          settings,
-          stockItems,
-          compositions,
-          stockMovements,
-          expenses,
-          cashClosings,
-        });
+    ordersSnapshotRef.current = orders;
+  }, [orders]);
+
+  const languageRef = useRef<Language>(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
+  const [clientSettings, setClientSettings] = useState<ClientNotificationSettings>({
+    soundsEnabled: true,
+    statusTexts: {},
+  });
+  const [clientToast, setClientToastState] = useState<ClientToastState | null>(null);
+  const clientToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [clientOrdersUnseen, setClientOrdersUnseen] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(CLIENT_UNSEEN_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    clientSettingsRef.current = clientSettings;
+  }, [clientSettings]);
+
+  const dismissClientToast = useCallback(() => {
+    if (clientToastTimerRef.current) {
+      clearTimeout(clientToastTimerRef.current);
+      clientToastTimerRef.current = null;
+    }
+    setClientToastState(null);
+  }, []);
+
+  const clearClientOrdersUnseen = useCallback(() => {
+    setClientOrdersUnseen(prev => (prev.length === 0 ? prev : []));
+    try {
+      localStorage.removeItem(CLIENT_UNSEEN_KEY);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Réglages client (sons, textes d'étape) : chargement public + rafraîchissement
+  // léger toutes les 30 s. Le Gérant les modifie depuis les Paramètres.
+  const refreshClientSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/client-settings', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.clientSettings && typeof data.clientSettings === 'object') {
+        const next: ClientNotificationSettings = {
+          soundsEnabled: data.clientSettings.soundsEnabled !== false,
+          statusTexts:
+            data.clientSettings.statusTexts && typeof data.clientSettings.statusTexts === 'object'
+              ? data.clientSettings.statusTexts
+              : {},
+        };
+        setClientSettings(prev =>
+          JSON.stringify(prev) === JSON.stringify(next) ? prev : next
+        );
       }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [
-    products,
-    customers,
-    computedDays,
-    settings,
-    stockItems,
-    compositions,
-    stockMovements,
-    expenses,
-    cashClosings,
-  ]);
+    } catch {
+      // Hors ligne : les valeurs par défaut restent appliquées.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshClientSettings();
+    const interval = setInterval(() => void refreshClientSettings(), 30000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshClientSettings();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refreshClientSettings]);
+
+  const saveClientSettings = useCallback(async (next: Partial<ClientNotificationSettings>) => {
+    try {
+      const merged: ClientNotificationSettings = {
+        ...clientSettingsRef.current,
+        ...next,
+        statusTexts: { ...clientSettingsRef.current.statusTexts, ...(next.statusTexts || {}) },
+      };
+      const res = await authFetch('/api/client-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientSettings: merged }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data?.clientSettings && typeof data.clientSettings === 'object') {
+        const saved: ClientNotificationSettings = {
+          soundsEnabled: data.clientSettings.soundsEnabled !== false,
+          statusTexts: data.clientSettings.statusTexts || {},
+        };
+        setClientSettings(saved);
+        clientSettingsRef.current = saved;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Profil serveur de cet appareil : affichage instantané depuis le cache
+  // local, puis révalidation systématique depuis /api/customers?deviceId=...
+  const applyCustomerProfile = useCallback((profile: CustomerProfile | null) => {
+    writeCachedProfile(profile);
+    setCurrentCustomer(profile ? mapProfileToCustomer(profile) : null);
+    setCustomerHasRecoveryCode(Boolean(profile?.hasRecoveryCode));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await fetchMyProfile();
+        if (!cancelled) applyCustomerProfile(profile);
+      } catch {
+        // Hors ligne ou migration pas encore exécutée : le cache local suffit.
+      } finally {
+        if (!cancelled) setCustomerProfileLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyCustomerProfile]);
+
+  const saveCustomerProfile = useCallback(
+    async (data: CustomerProfileInput): Promise<Customer> => {
+      const profile = await saveMyProfile(data);
+      applyCustomerProfile(profile);
+      return mapProfileToCustomer(profile);
+    },
+    [applyCustomerProfile]
+  );
+
+  const recoverCustomerProfile = useCallback(
+    async (phone: string, code: string): Promise<Customer> => {
+      const profile = await recoverMyProfile(phone, code);
+      applyCustomerProfile(profile);
+      return mapProfileToCustomer(profile);
+    },
+    [applyCustomerProfile]
+  );
+
+  const eraseCustomerProfile = useCallback(async () => {
+    await eraseMyProfile();
+    applyCustomerProfile(null);
+  }, [applyCustomerProfile]);
+
+  // ─── Alertes de suivi client ───────────────────────────────────────────
+  // Clignotement du titre de l'onglet jusqu'au retour sur l'onglet (15 s max).
+  const flashDocumentTitle = useCallback((message: string) => {
+    if (typeof document === 'undefined') return;
+    const originalTitle = document.title;
+    if (titleFlashTimerRef.current) clearInterval(titleFlashTimerRef.current);
+    if (titleFlashStopRef.current) clearTimeout(titleFlashStopRef.current);
+
+    const stop = () => {
+      if (titleFlashTimerRef.current) {
+        clearInterval(titleFlashTimerRef.current);
+        titleFlashTimerRef.current = null;
+      }
+      if (titleFlashStopRef.current) {
+        clearTimeout(titleFlashStopRef.current);
+        titleFlashStopRef.current = null;
+      }
+      document.removeEventListener('visibilitychange', onVisible);
+      document.title = originalTitle;
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') stop();
+    };
+
+    let flashOn = false;
+    titleFlashTimerRef.current = setInterval(() => {
+      flashOn = !flashOn;
+      document.title = flashOn ? `🔔 ${message}` : originalTitle;
+    }, 900);
+    document.addEventListener('visibilitychange', onVisible);
+    titleFlashStopRef.current = setTimeout(stop, 15000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (titleFlashTimerRef.current) clearInterval(titleFlashTimerRef.current);
+      if (titleFlashStopRef.current) clearTimeout(titleFlashStopRef.current);
+    };
+  }, []);
+
+  // À chaque changement d'état détecté : sonnerie (si activée), vibration,
+  // toast FR/AR, clignotement du titre et pastille « Mes commandes ».
+  const announceClientStatusChange = useCallback(
+    (order: Order, statusKey: ClientStatusKey) => {
+      const isArabic = languageRef.current === 'ar';
+      const lang = isArabic ? 'ar' : 'fr';
+      const custom = clientSettingsRef.current.statusTexts?.[lang]?.[statusKey];
+      const message = custom || DEFAULT_CLIENT_STATUS_TEXTS[lang][statusKey];
+
+      if (clientSettingsRef.current.soundsEnabled) {
+        soundService.playClientStatusChime(statusKey);
+      }
+      try {
+        navigator.vibrate?.([200, 100, 200]);
+      } catch {
+        // Vibration non supportée (desktop) : ignorer.
+      }
+
+      setClientToastState({
+        orderId: order.id,
+        statusKey,
+        message,
+        tone: statusKey === 'cancelled' ? 'alert' : statusKey === 'delivered' ? 'success' : 'info',
+        reason: statusKey === 'cancelled' ? order.cancellationReason : undefined,
+      });
+      if (clientToastTimerRef.current) clearTimeout(clientToastTimerRef.current);
+      clientToastTimerRef.current = setTimeout(() => setClientToastState(null), 6000);
+
+      flashDocumentTitle(message);
+
+      setClientOrdersUnseen(prev => {
+        if (prev.includes(order.id)) return prev;
+        const next = [...prev, order.id].slice(-20);
+        try {
+          localStorage.setItem(CLIENT_UNSEEN_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    [flashDocumentTitle]
+  );
+
+  // Comparaison au dernier statut mémorisé (localStorage) : pas de son
+  // rejoué au rechargement de la page, uniquement lors d'un vrai changement.
+  useEffect(() => {
+    if (getAdminToken()) return; // Les écrans staff ont leurs propres sons.
+    if (!remoteOrdersLoadedRef.current) return;
+    for (const order of orders) {
+      const statusKey = clientStatusKeyForOrder(order);
+      if (!statusKey) continue;
+      const storageKey = `sultan_order_status_${order.id}`;
+      let previous: string | null = null;
+      try {
+        previous = localStorage.getItem(storageKey);
+      } catch {
+        previous = null;
+      }
+      if (previous && previous !== statusKey) {
+        announceClientStatusChange(order, statusKey);
+      }
+      if (previous !== statusKey) {
+        try {
+          localStorage.setItem(storageKey, statusKey);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }, [orders, announceClientStatusChange]);
+
+  // ─── Clients (back-office) : liste serveur sans code de récupération ───
+  const refreshCustomersFromServer = useCallback(async () => {
+    if (!getAdminToken()) return;
+    try {
+      const res = await authFetch('/api/customers');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data?.customers)) return;
+      const mapped: Customer[] = data.customers.map((profile: CustomerProfile) =>
+        mapProfileToCustomer(profile)
+      );
+      setCustomers(prev =>
+        JSON.stringify(prev) === JSON.stringify(mapped) ? prev : mapped
+      );
+    } catch {
+      // Hors ligne : la liste locale fait office de repli.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCustomersFromServer();
+    const interval = setInterval(() => void refreshCustomersFromServer(), 30000);
+    return () => clearInterval(interval);
+  }, [refreshCustomersFromServer]);
+
 
   // Cross-tab real-time synchronization via 'storage' event
   useEffect(() => {
@@ -1850,8 +2007,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setExpenses(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
         } else if (e.key === STORAGE_KEYS.CASH_CLOSINGS && e.newValue) {
           setCashClosings(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
-        } else if (e.key === STORAGE_KEYS.CURRENT_CUSTOMER) {
-          setCurrentCustomer(e.newValue ? JSON.parse(e.newValue) : null);
         } else if (e.key === STORAGE_KEYS.CART && e.newValue) {
           setCart(prev => (JSON.stringify(prev) === e.newValue ? prev : JSON.parse(e.newValue!)));
         } else if (e.key === STORAGE_KEYS.LANG && e.newValue) {
@@ -2107,25 +2262,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       );
     }
 
-    const customer = currentCustomer || {
-      id: 'cust-guest',
-      name: 'Client Invité',
-      phone: '0771000000',
-      wilaya: 'Alger',
-      commune: 'Birkhadem',
-      address: deliveryAddress?.address || 'Birkhadem',
-      landmark: deliveryAddress?.landmark,
-      mapUrl: deliveryAddress?.mapUrl,
-      latitude: deliveryAddress?.latitude,
-      longitude: deliveryAddress?.longitude,
-      orderCount: 0,
-      totalSpent: 0,
-      createdAt: new Date().toISOString(),
-    };
+    // Le profil de cet appareil est obligatoire : sans profil, l'UI redirige
+    // vers le formulaire avant d'atteindre ce point (plus de client invité
+    // anonyme, chaque commande est rattachée au device_id du profil).
+    if (!currentCustomer) {
+      throw new Error(
+        language === 'ar'
+          ? 'يرجى إكمال الملف الشخصي قبل تأكيد الطلب.'
+          : 'Veuillez compléter votre profil avant de confirmer la commande.'
+      );
+    }
+    const customer = currentCustomer;
 
     const { order: serverOrder } = await createOrderRemote({
       clientRequestId,
       accessToken,
+      deviceId: getDeviceId(),
       customerId: customer.id,
       customerName: customer.name,
       customerPhone: customer.phone,
@@ -2139,17 +2291,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       language,
     }, { staff: false });
 
-    setCustomers(prev =>
-      prev.map(c =>
-        c.id === customer.id
-          ? {
-              ...c,
-              orderCount: c.orderCount + 1,
-              totalSpent: c.totalSpent + serverOrder.total,
-            }
-          : c
-      )
-    );
+    // Les statistiques client sont recalculées côté back-office à partir des
+    // commandes partagées ; rien à maintenir localement ici.
+
+    // Mémorise le statut initial pour ne pas déclencher d'alerte « Reçue »
+    // pour la personne qui vient juste de valider sa commande.
+    try {
+      localStorage.setItem(`sultan_order_status_${serverOrder.id}`, 'pending');
+    } catch {
+      // ignore
+    }
 
     mergeRemoteOrders([serverOrder], { announceNew: false });
     remoteOrdersLoadedRef.current = true;
@@ -2168,8 +2319,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return next;
     });
 
-    if (settings.soundEnabled) {
-      soundService.playNewOrderBeep();
+    // Confirmation sonore côté client : retour doux (la sonnerie staff
+    // « nouvelle commande » reste réservée aux écrans équipe).
+    if (getAdminToken()) {
+      if (settings.soundEnabled) {
+        soundService.playNewOrderBeep();
+      }
+    } else if (clientSettingsRef.current.soundsEnabled) {
+      soundService.playSuccess();
     }
 
     return serverOrder;
@@ -2894,14 +3051,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const next = [...products, newProd];
     setProducts(next);
-    pushPatchToServer({ products: next });
+
     soundService.playSuccess();
   };
 
   const updateProduct = (id: string, updates: Partial<Product>) => {
     const next = products.map(p => (p.id === id ? { ...p, ...updates } : p));
     setProducts(next);
-    pushPatchToServer({ products: next });
+
     soundService.playSuccess();
   };
 
@@ -2909,7 +3066,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Soft delete to protect past orders historical snapshots
     const next = products.map(p => (p.id === id ? { ...p, isArchived: true, isVisible: false } : p));
     setProducts(next);
-    pushPatchToServer({ products: next });
+
     soundService.playSuccess();
   };
 
@@ -2927,14 +3084,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const next = [...products, copy];
     setProducts(next);
-    pushPatchToServer({ products: next });
+
     soundService.playSuccess();
   };
 
   const toggleProductAvailability = (id: string) => {
     const next = products.map(p => (p.id === id ? { ...p, isAvailable: !p.isAvailable } : p));
     setProducts(next);
-    pushPatchToServer({ products: next });
+
     soundService.playSuccess();
   };
 
@@ -2947,7 +3104,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return p;
     });
     setProducts(next);
-    pushPatchToServer({ products: next });
+
   };
 
   // Categories methods
@@ -2959,14 +3116,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const next = [...categories, newCat];
     setCategories(next);
-    pushPatchToServer({ categories: next });
+
     soundService.playSuccess();
   };
 
   const updateCategory = (id: string, updates: Partial<ProductCategoryItem>) => {
     const next = categories.map(c => (c.id === id ? { ...c, ...updates } : c));
     setCategories(next);
-    pushPatchToServer({ categories: next });
+
     soundService.playSuccess();
   };
 
@@ -2979,7 +3136,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       nextProds = products.map(p => (p.category === id ? { ...p, category: moveProductsToCategoryId } : p));
       setProducts(nextProds);
     }
-    pushPatchToServer({ categories: nextCats, products: nextProds });
+
     soundService.playSuccess();
   };
 
@@ -2991,7 +3148,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       .sort((a, b) => a.order - b.order);
     setCategories(next);
-    pushPatchToServer({ categories: next });
+
   };
 
   // Client Page Content methods
@@ -3014,7 +3171,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (data.settings) {
           setSettings(prev => ({ ...prev, ...data.settings }));
         }
-        pushPatchToServer({ clientPageContent: data.clientPageContent || contentToPublish });
+
         soundService.playSuccess();
         return true;
       }
@@ -3077,7 +3234,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       setProducts(importedProducts);
-      pushPatchToServer({ products: importedProducts, categories: nextCategories });
+
       soundService.playSuccess();
       return {
         success: true,
@@ -3117,7 +3274,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCart([]);
     setIsRevenueUnlocked(false);
     localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
-    pushPatchToServer({}, true);
+
     soundService.playSuccess();
   };
 
@@ -3131,57 +3288,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
     setClientTab('cart');
     soundService.playSuccess();
-  };
-
-  const registerOrLoginCustomer = (data: {
-    name: string;
-    phone: string;
-    commune: string;
-    address: string;
-    landmark?: string;
-    mapUrl?: string;
-    latitude?: number;
-    longitude?: number;
-  }) => {
-    const existing = customers.find(c => c.phone === data.phone);
-    if (existing) {
-      const updated = {
-        ...existing,
-        name: data.name || existing.name,
-        commune: data.commune || existing.commune,
-        address: data.address || existing.address,
-        landmark: data.landmark || existing.landmark,
-        mapUrl: data.mapUrl !== undefined ? data.mapUrl : existing.mapUrl,
-        latitude: data.latitude !== undefined ? data.latitude : existing.latitude,
-        longitude: data.longitude !== undefined ? data.longitude : existing.longitude,
-      };
-      setCustomers(prev => prev.map(c => (c.id === existing.id ? updated : c)));
-      setCurrentCustomer(updated);
-      return updated;
-    }
-
-    const newCust: Customer = {
-      id: `cust-${Date.now()}`,
-      name: data.name,
-      phone: data.phone,
-      wilaya: 'Alger',
-      commune: data.commune,
-      address: data.address,
-      landmark: data.landmark,
-      mapUrl: data.mapUrl,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      orderCount: 0,
-      totalSpent: 0,
-      createdAt: new Date().toISOString(),
-    };
-    setCustomers(prev => [newCust, ...prev]);
-    setCurrentCustomer(newCust);
-    return newCust;
-  };
-
-  const logoutCustomer = () => {
-    setCurrentCustomer(null);
   };
 
   return (
@@ -3288,11 +3394,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         resetAllSeedData,
         resetToSeedData: resetAllSeedData,
         reorderPastOrder,
-        registerOrLoginCustomer,
-        logoutCustomer,
+        customerProfileLoading,
+        saveCustomerProfile,
+        recoverCustomerProfile,
+        eraseCustomerProfile,
+        customerHasRecoveryCode,
+        clientSettings,
+        saveClientSettings,
+        clientToast,
+        dismissClientToast,
+        clientOrdersUnseen,
+        clearClientOrdersUnseen,
         refreshSync: async () => {
           await Promise.allSettled([
-            refreshRemoteState(),
             refreshOrdersFromSupabase(),
             refreshCatalogFromSupabase(),
           ]);

@@ -10,14 +10,14 @@ import { ClientStoreLocator } from './ClientStoreLocator';
 import { ClientStickyCartBar } from './ClientStickyCartBar';
 import { ClientInfoModals } from './ClientInfoModals';
 import { ClientBottomNav } from './ClientBottomNav';
-import { ClientAuthModal } from './ClientAuthModal';
+import { ClientToast } from './ClientToast';
 
 interface ClientAppProps {
   embedded?: boolean;
 }
 
 export const ClientApp: React.FC<ClientAppProps> = ({ embedded = false }) => {
-  const { currentCustomer, clientTab, setClientTab, language } = useApp();
+  const { clientTab, setClientTab, language } = useApp();
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
@@ -41,47 +41,46 @@ export const ClientApp: React.FC<ClientAppProps> = ({ embedded = false }) => {
 
   const clientBody = (
     <div className="relative flex-1 flex flex-col overflow-hidden bg-[#f8f7f4] dark:bg-[#121215] text-zinc-900 dark:text-zinc-100 h-full w-full transition-colors">
-      {!currentCustomer ? (
-        <ClientAuthModal />
-      ) : (
-        <>
-          {/* Header Bar with Logo, Hamburger & KFC Delivery Toggle */}
-          <ClientHeader
-            onOpenDrawer={() => setIsDrawerOpen(true)}
-            onOpenCart={() => setClientTab('cart')}
-            orderType={orderType}
-            onOrderTypeChange={setOrderType}
-          />
+      {/* Navigation libre : aucun mur d'authentification. Le profil est créé
+          au premier achat depuis l'appareil (device_id). */}
+      {/* Header Bar with Logo, Hamburger & Delivery Toggle */}
+      <ClientHeader
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        onOpenCart={() => setClientTab('cart')}
+        orderType={orderType}
+        onOrderTypeChange={setOrderType}
+      />
 
-          {/* Active Client View */}
-          {clientTab === 'menu' && <ClientMenu />}
-          {clientTab === 'cart' && <ClientCart />}
-          {clientTab === 'tracking' && <ClientTracking />}
-          {clientTab === 'profile' && <ClientProfile />}
-          {(clientTab as string) === 'store_locator' && <ClientStoreLocator />}
+      {/* Active Client View */}
+      {clientTab === 'menu' && <ClientMenu />}
+      {clientTab === 'cart' && <ClientCart />}
+      {clientTab === 'tracking' && <ClientTracking />}
+      {clientTab === 'profile' && <ClientProfile />}
+      {(clientTab as string) === 'store_locator' && <ClientStoreLocator />}
 
-          {/* Floating Sticky Cart Bottom Bar */}
-          <ClientStickyCartBar onOpenCart={() => setClientTab('cart')} />
+      {/* Floating Sticky Cart Bottom Bar */}
+      <ClientStickyCartBar onOpenCart={() => setClientTab('cart')} />
 
-          {/* Bottom Navigation Bar */}
-          <ClientBottomNav />
+      {/* Bottom Navigation Bar */}
+      <ClientBottomNav />
 
-          {/* Hamburger Drawer Overlay */}
-          <ClientDrawer
-            isOpen={isDrawerOpen}
-            onClose={() => setIsDrawerOpen(false)}
-            onNavigate={handleNavigate}
-            onOpenInfoModal={setInfoModalType}
-          />
+      {/* Hamburger Drawer Overlay */}
+      <ClientDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        onNavigate={handleNavigate}
+        onOpenInfoModal={setInfoModalType}
+      />
 
-          {/* Legal / Info Modals */}
-          <ClientInfoModals
-            type={infoModalType}
-            isOpen={Boolean(infoModalType)}
-            onClose={() => setInfoModalType(null)}
-          />
-        </>
-      )}
+      {/* Legal / Info Modals */}
+      <ClientInfoModals
+        type={infoModalType}
+        isOpen={Boolean(infoModalType)}
+        onClose={() => setInfoModalType(null)}
+      />
+
+      {/* Toasts de changement d'état (son + vibration déclenchés par le contexte) */}
+      <ClientToast />
     </div>
   );
 

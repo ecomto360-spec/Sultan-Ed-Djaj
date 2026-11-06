@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   XCircle,
+  Bell,
 } from 'lucide-react';
 import {
   fetchTeamAccounts,
@@ -51,6 +52,8 @@ export const CommercialSettings: React.FC = () => {
     language,
     setLanguage,
     isStoreActuallyOpen,
+    clientSettings,
+    saveClientSettings,
   } = useApp();
 
   const t = TRANSLATIONS[language];
@@ -632,6 +635,15 @@ export const CommercialSettings: React.FC = () => {
             </div>
           </div>
 
+          {/* ─── Notifications client (suivi de commande) ─── */}
+          {isManager && (
+            <ClientNotificationsCard
+              clientSettings={clientSettings}
+              saveClientSettings={saveClientSettings}
+              isArabic={isArabic}
+            />
+          )}
+
           {/* Reset Seed Data */}
           <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 sm:p-5 border border-red-200 dark:border-red-900/40 shadow-xs space-y-2 text-xs">
             <h3 className="text-sm font-bold text-red-600 dark:text-red-400 flex items-center gap-2">
@@ -1150,6 +1162,139 @@ export const CommercialSettings: React.FC = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ─── Notifications client : sons + textes personnalisés par étape (FR/AR) ───
+// Ces réglages sont diffusés aux navigateurs clients via /api/client-settings
+// et s'appliquent aux sonneries et aux messages de suivi de commande.
+const CLIENT_STATUS_FIELDS: { key: 'preparing' | 'ready' | 'delivering' | 'delivered' | 'cancelled'; fr: string; ar: string }[] = [
+  { key: 'preparing', fr: 'Votre commande est en préparation 👨‍🍳', ar: 'طلبك قيد التحضير 👨‍🍳' },
+  { key: 'ready', fr: 'Votre commande est prête ✅', ar: 'طلبك جاهز ✅' },
+  { key: 'delivering', fr: 'Votre commande est en livraison 🛵', ar: 'طلبك في الطريق 🛵' },
+  { key: 'delivered', fr: 'Votre commande a été livrée 🎉', ar: 'تم تسليم طلبك 🎉' },
+  { key: 'cancelled', fr: 'Votre commande a été annulée ❌', ar: 'تم إلغاء طلبك ❌' },
+];
+
+const ClientNotificationsCard: React.FC<{
+  clientSettings: import('../../context/AppContext').ClientNotificationSettings;
+  saveClientSettings: (next: import('../../context/AppContext').ClientNotificationSettings) => Promise<boolean>;
+  isArabic: boolean;
+}> = ({ clientSettings, saveClientSettings, isArabic }) => {
+  const [soundsEnabled, setSoundsEnabled] = useState(clientSettings.soundsEnabled !== false);
+  const [texts, setTexts] = useState<{ fr: Record<string, string>; ar: Record<string, string> }>(() => ({
+    fr: { ...(clientSettings.statusTexts?.fr || {}) },
+    ar: { ...(clientSettings.statusTexts?.ar || {}) },
+  }));
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSoundsEnabled(clientSettings.soundsEnabled !== false);
+    setTexts({
+      fr: { ...(clientSettings.statusTexts?.fr || {}) },
+      ar: { ...(clientSettings.statusTexts?.ar || {}) },
+    });
+  }, [clientSettings]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    const ok = await saveClientSettings({ soundsEnabled, statusTexts: texts });
+    setIsSaving(false);
+    if (ok) {
+      setSavedAt(Date.now());
+      setTimeout(() => setSavedAt(null), 2500);
+    }
+  };
+
+  const inputClass =
+    'w-full px-2.5 py-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-lg border border-zinc-300 dark:border-zinc-700 text-[11px] text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-amber-500';
+
+  return (
+    <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 sm:p-5 border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-3 text-xs">
+      <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+        <Bell className="w-4 h-4 text-orange-500" />
+        <span>{isArabic ? 'إشعارات تتبع الطلبات (الزبائن)' : 'Notifications de suivi (clients)'}</span>
+      </h3>
+      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+        {isArabic
+          ? 'تُطبَّق على أجهزة الزبائن: رنات تغيّر حالة الطلب والرسائل القصيرة المعروضة. يتم التحديث تلقائياً خلال ~30 ثانية.'
+          : 'S’appliquent aux appareils clients : sonneries de changement d’état et messages affichés. Propagation automatique en ~30 s.'}
+      </p>
+
+      <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/60">
+        <div>
+          <span className="font-bold text-zinc-800 dark:text-zinc-200">
+            {isArabic ? 'أصوات تتبع الطلب' : 'Sonneries de suivi client'}
+          </span>
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+            {isArabic ? 'رنة + اهتزاز عند كل تغيّر للحالة' : 'Sonnerie + vibration à chaque changement d’état'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setSoundsEnabled(v => !v)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+            soundsEnabled
+              ? 'bg-orange-600/20 text-orange-700 dark:text-orange-400 border-orange-500/40'
+              : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700'
+          }`}
+        >
+          {soundsEnabled ? (isArabic ? 'مفعّلة' : 'Activées') : (isArabic ? 'معطّلة' : 'Désactivées')}
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
+          {isArabic ? 'نصوص الرسائل حسب الحالة (اتركه فارغاً للنص الافتراضي)' : 'Textes des messages par étape (vide = texte par défaut)'}
+        </p>
+        {CLIENT_STATUS_FIELDS.map(field => (
+          <div key={field.key} className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <input
+              type="text"
+              dir="ltr"
+              value={texts.fr[field.key] || ''}
+              onChange={e => setTexts(prev => ({ ...prev, fr: { ...prev.fr, [field.key]: e.target.value } }))}
+              placeholder={`FR · ${field.fr}`}
+              className={inputClass}
+              maxLength={120}
+            />
+            <input
+              type="text"
+              dir="rtl"
+              value={texts.ar[field.key] || ''}
+              onChange={e => setTexts(prev => ({ ...prev, ar: { ...prev.ar, [field.key]: e.target.value } }))}
+              placeholder={`عربي · ${field.ar}`}
+              className={inputClass}
+              maxLength={120}
+            />
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
+        {isArabic
+          ? 'ملاحظة: الإشعارات خارج التطبيق (شاشة القفل) ستُضاف في مرحلة لاحقة.'
+          : 'Note : les notifications hors-app (écran verrouillé) seront ajoutées dans une phase ultérieure.'}
+      </p>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={isSaving}
+          className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-60 text-white font-bold text-xs shadow-md transition"
+        >
+          {isSaving ? (isArabic ? 'جاري الحفظ...' : 'Enregistrement…') : (isArabic ? 'حفظ' : 'Enregistrer')}
+        </button>
+        {savedAt && (
+          <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            {isArabic ? 'تم الحفظ' : 'Enregistré'}
+          </span>
+        )}
+      </div>
     </div>
   );
 };

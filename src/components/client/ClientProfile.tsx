@@ -1,37 +1,41 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { ThemeToggle } from '../common/ThemeToggle';
+import { isValidClientPhone } from '../../services/customerService';
 import {
   User,
   Phone,
   MapPin,
   Globe,
-  Download,
   LogOut,
-  RotateCcw,
   Check,
-  Sparkles,
-  Clock,
   Navigation,
   ExternalLink,
   Loader2,
-  CheckCircle2,
+  KeyRound,
+  ShieldCheck,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
+const RETURN_TO_CART_FLAG = 'sultan_profile_return_cart';
+
+// Profil client de cet appareil : formulaire VIDE au premier achat (aucune
+// donnée d'un autre visiteur), affichage du profil enregistré ensuite, et
+// récupération par téléphone + code personnel si l'appareil change.
 export const ClientProfile: React.FC = () => {
   const {
     currentCustomer,
-    registerOrLoginCustomer,
-    logoutCustomer,
-    orders,
-    reorderPastOrder,
-    setClientActiveOrder,
+    customerProfileLoading,
+    customerHasRecoveryCode,
+    saveCustomerProfile,
+    recoverCustomerProfile,
+    eraseCustomerProfile,
     setClientTab,
     language,
     setLanguage,
-    settings,
   } = useApp();
 
   const t = TRANSLATIONS[language];
@@ -40,20 +44,46 @@ export const ClientProfile: React.FC = () => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showIOSModal, setShowIOSModal] = useState(false);
 
-  // Edit address state
-  const [isEditing, setIsEditing] = useState(false);
+  const hasProfile = Boolean(currentCustomer);
+  const [isEditing, setIsEditing] = useState(!hasProfile);
+
   const [name, setName] = useState(currentCustomer?.name || '');
   const [phone, setPhone] = useState(currentCustomer?.phone || '');
+  const [wilaya, setWilaya] = useState(currentCustomer?.wilaya || 'Alger');
   const [commune, setCommune] = useState(currentCustomer?.commune || 'Birkhadem');
   const [address, setAddress] = useState(currentCustomer?.address || '');
   const [landmark, setLandmark] = useState(currentCustomer?.landmark || '');
   const [mapUrl, setMapUrl] = useState(currentCustomer?.mapUrl || '');
   const [latitude, setLatitude] = useState<number | undefined>(currentCustomer?.latitude);
   const [longitude, setLongitude] = useState<number | undefined>(currentCustomer?.longitude);
-  const [isLocating, setIsLocating] = useState(false);
-  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState('');
 
-  const customerOrders = orders.filter(o => o.customerId === currentCustomer?.id || o.customerPhone === currentCustomer?.phone);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [recoverPhone, setRecoverPhone] = useState('');
+  const [recoverCode, setRecoverCode] = useState('');
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoverError, setRecoverError] = useState('');
+
+  const [confirmErase, setConfirmErase] = useState(false);
+
+  useEffect(() => {
+    if (currentCustomer) {
+      setName(currentCustomer.name || '');
+      setPhone(currentCustomer.phone || '');
+      setWilaya(currentCustomer.wilaya || 'Alger');
+      setCommune(currentCustomer.commune || 'Birkhadem');
+      setAddress(currentCustomer.address || '');
+      setLandmark(currentCustomer.landmark || '');
+      setMapUrl(currentCustomer.mapUrl || '');
+      setLatitude(currentCustomer.latitude);
+      setLongitude(currentCustomer.longitude);
+    }
+  }, [currentCustomer]);
 
   const handleGetGeolocation = () => {
     if (!navigator.geolocation) return;
@@ -74,51 +104,172 @@ export const ClientProfile: React.FC = () => {
     );
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!phone.trim()) return;
-
-    registerOrLoginCustomer({
-      name: name.trim() || currentCustomer?.name || (isArabic ? 'زبون' : 'Client'),
-      phone: phone.trim(),
-      commune: commune.trim() || 'Birkhadem',
-      address: address.trim(),
-      landmark: landmark.trim() || undefined,
-      mapUrl: mapUrl.trim() || undefined,
-      latitude,
-      longitude,
-    });
-
-    setIsEditing(false);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+  const returnToCartIfRequested = () => {
+    try {
+      if (sessionStorage.getItem(RETURN_TO_CART_FLAG) === '1') {
+        sessionStorage.removeItem(RETURN_TO_CART_FLAG);
+        setClientTab('cart');
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
   };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    setSavedSuccess(false);
+
+    if (name.trim().length < 2) {
+      setFormError(isArabic ? 'يرجى إدخال الاسم الكامل.' : 'Veuillez saisir votre nom complet.');
+      return;
+    }
+    if (!isValidClientPhone(phone)) {
+      setFormError(
+        isArabic
+          ? 'رقم الهاتف يجب أن يبدأ بـ 05 أو 06 أو 07 ويتكون من 8 أرقام.'
+          : 'Le téléphone doit commencer par 05, 06 ou 07 et contenir 8 chiffres.'
+      );
+      return;
+    }
+    if (!address.trim()) {
+      setFormError(isArabic ? 'يرجى إدخال العنوان.' : 'Veuillez saisir votre adresse.');
+      return;
+    }
+    if (recoveryCode.trim() && !/^\d{4}$/.test(recoveryCode.trim())) {
+      setFormError(
+        isArabic ? 'رمز الاستعادة يجب أن يتكون من 4 أرقام.' : 'Le code de récupération doit contenir 4 chiffres.'
+      );
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await saveCustomerProfile({
+        name: name.trim(),
+        phone: phone.trim(),
+        wilaya: wilaya.trim() || 'Alger',
+        commune: commune.trim() || 'Birkhadem',
+        address: address.trim(),
+        landmark: landmark.trim() || undefined,
+        mapUrl: mapUrl.trim() || undefined,
+        latitude,
+        longitude,
+        recoveryCode: recoveryCode.trim() || undefined,
+      });
+      setRecoveryCode('');
+      setIsEditing(false);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+      returnToCartIfRequested();
+    } catch (err: any) {
+      setFormError(err?.message || (isArabic ? 'فشل حفظ الملف الشخصي.' : 'L’enregistrement du profil a échoué.'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRecover = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoverError('');
+    if (!isValidClientPhone(recoverPhone)) {
+      setRecoverError(
+        isArabic
+          ? 'رقم الهاتف يجب أن يبدأ بـ 05 أو 06 أو 07 ويتكون من 8 أرقام.'
+          : 'Le téléphone doit commencer par 05, 06 ou 07 et contenir 8 chiffres.'
+      );
+      return;
+    }
+    if (!/^\d{4}$/.test(recoverCode.trim())) {
+      setRecoverError(isArabic ? 'الرمز يجب أن يتكون من 4 أرقام.' : 'Le code doit contenir 4 chiffres.');
+      return;
+    }
+
+    setIsRecovering(true);
+    try {
+      await recoverCustomerProfile(recoverPhone.trim(), recoverCode.trim());
+      setShowRecovery(false);
+      setRecoverPhone('');
+      setRecoverCode('');
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+      returnToCartIfRequested();
+    } catch (err: any) {
+      setRecoverError(err?.message || (isArabic ? 'فشلت عملية الاستعادة.' : 'La récupération a échoué.'));
+    } finally {
+      setIsRecovering(false);
+    }
+  };
+
+  const handleErase = async () => {
+    setFormError('');
+    try {
+      await eraseCustomerProfile();
+      setConfirmErase(false);
+      setIsEditing(true);
+      setName('');
+      setPhone('');
+      setWilaya('Alger');
+      setCommune('Birkhadem');
+      setAddress('');
+      setLandmark('');
+      setMapUrl('');
+      setLatitude(undefined);
+      setLongitude(undefined);
+      setRecoveryCode('');
+    } catch (err: any) {
+      setFormError(err?.message || (isArabic ? 'فشل حذف البيانات.' : 'La suppression a échoué.'));
+    }
+  };
+
+  const inputClass =
+    'w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500';
+  const labelClass = 'text-[10px] text-zinc-600 dark:text-zinc-400';
 
   return (
     <div className="flex-1 overflow-y-auto p-3.5 pb-24 space-y-4">
-      {/* Customer Info Card */}
+      {/* Chargement initial du profil */}
+      {customerProfileLoading && !hasProfile && (
+        <div className="flex items-center justify-center py-6 text-zinc-400 dark:text-zinc-500">
+          <Loader2 className="w-5 h-5 animate-spin" />
+        </div>
+      )}
+
+      {/* Carte profil : infos enregistrées ou formulaire vide */}
       <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-3 shadow-sm transition-colors">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-orange-400 flex items-center justify-center font-bold text-base">
-              {currentCustomer?.name?.charAt(0).toUpperCase() || 'S'}
+              {currentCustomer?.name?.charAt(0).toUpperCase() || <User className="w-5 h-5" />}
             </div>
             <div>
               <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
-                {currentCustomer?.name}
+                {hasProfile ? currentCustomer?.name : (isArabic ? 'ملفي الشخصي' : 'Mon profil')}
               </h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
-                {currentCustomer?.phone}
-              </p>
+              {hasProfile ? (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                  {currentCustomer?.phone}
+                </p>
+              ) : (
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {isArabic
+                    ? 'أكمل معلوماتك لتأكيد طلبك الأول'
+                    : 'Complétez vos informations pour votre première commande'}
+                </p>
+              )}
             </div>
           </div>
 
-          <button
-            onClick={() => setIsEditing(!isEditing)}
-            className="text-[11px] font-semibold text-amber-700 dark:text-orange-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20"
-          >
-            {isEditing ? (isArabic ? 'إلغاء' : 'Annuler') : (isArabic ? 'تعديل' : 'Modifier')}
-          </button>
+          {hasProfile && (
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className="text-[11px] font-semibold text-amber-700 dark:text-orange-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20"
+            >
+              {isEditing ? (isArabic ? 'إلغاء' : 'Annuler') : (isArabic ? 'تعديل' : 'Modifier')}
+            </button>
+          )}
         </div>
 
         {savedSuccess && (
@@ -128,8 +279,8 @@ export const ClientProfile: React.FC = () => {
           </div>
         )}
 
-        {/* Address Card or Edit Form */}
-        {!isEditing ? (
+        {/* Affichage des infos enregistrées */}
+        {hasProfile && !isEditing ? (
           <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800/80 space-y-1.5 text-xs text-zinc-700 dark:text-zinc-300">
             <div className="flex items-start gap-2">
               <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400 shrink-0 mt-0.5" />
@@ -147,11 +298,19 @@ export const ClientProfile: React.FC = () => {
                   rel="noopener noreferrer"
                   className="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 text-[11px] font-semibold"
                 >
-                  <span>{isArabic ? 'موقع GPS مسجل (Google Maps)' : 'Position GPS enregistrée (Google Maps)'}</span>
+                  <span>{isArabic ? 'موقع GPS مسجل' : 'Position GPS enregistrée'}</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
             )}
+            <div className="flex items-center gap-2 pt-1 text-[11px]">
+              <KeyRound className="w-3.5 h-3.5 text-zinc-400" />
+              <span className={customerHasRecoveryCode ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500 dark:text-zinc-400'}>
+                {customerHasRecoveryCode
+                  ? (isArabic ? 'رمز استعادة محدد' : 'Code de récupération défini')
+                  : (isArabic ? 'لا يوجد رمز استعادة (اختياري)' : 'Aucun code de récupération (optionnel)')}
+              </span>
+            </div>
             <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1">
               <span>{t.ordersCount}: <strong className="text-zinc-900 dark:text-zinc-200">{currentCustomer?.orderCount || 0}</strong></span>
               <span>{t.totalSpent}: <strong className="text-amber-700 dark:text-amber-400">{currentCustomer?.totalSpent?.toLocaleString() || 0} {t.currency}</strong></span>
@@ -160,54 +319,66 @@ export const ClientProfile: React.FC = () => {
         ) : (
           <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-200 dark:border-zinc-800 space-y-2.5 text-xs">
             <div>
-              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.fullName}</label>
-              <input
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
-              />
+              <label className={labelClass}>{t.fullName} *</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} className={inputClass} />
             </div>
             <div>
-              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.phoneNumber}</label>
+              <label className={labelClass}>{t.phoneNumber} *</label>
               <input
-                type="text"
+                type="tel"
+                dir="ltr"
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 font-mono focus:outline-none focus:border-amber-500"
+                placeholder="05 / 06 / 07 + 8 chiffres"
+                className={`${inputClass} font-mono`}
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.commune}</label>
-                <input
-                  type="text"
-                  value={commune}
-                  onChange={e => setCommune(e.target.value)}
-                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
-                />
+                <label className={labelClass}>{isArabic ? 'الولاية' : 'Wilaya'}</label>
+                <input type="text" value={wilaya} onChange={e => setWilaya(e.target.value)} className={inputClass} />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.landmark}</label>
-                <input
-                  type="text"
-                  value={landmark}
-                  onChange={e => setLandmark(e.target.value)}
-                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
-                />
+                <label className={labelClass}>{t.commune}</label>
+                <input type="text" value={commune} onChange={e => setCommune(e.target.value)} className={inputClass} />
               </div>
             </div>
             <div>
-              <label className="text-[10px] text-zinc-600 dark:text-zinc-400">{t.address}</label>
-              <input
-                type="text"
-                value={address}
-                onChange={e => setAddress(e.target.value)}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2 text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-amber-500"
-              />
+              <label className={labelClass}>{t.address} *</label>
+              <input type="text" value={address} onChange={e => setAddress(e.target.value)} className={inputClass} />
             </div>
+            <div>
+              <label className={labelClass}>{t.landmark}</label>
+              <input type="text" value={landmark} onChange={e => setLandmark(e.target.value)} className={inputClass} />
+            </div>
+
+            {/* Code de récupération optionnel (4 chiffres) */}
             <div className="space-y-1 pt-1 border-t border-zinc-200 dark:border-zinc-800/80">
-              <label className="text-[10px] text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
+              <label className={`${labelClass} flex items-center gap-1`}>
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>
+                  {isArabic ? 'رمز الاستعادة (اختياري، 4 أرقام)' : 'Code de récupération (optionnel, 4 chiffres)'}
+                </span>
+              </label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                dir="ltr"
+                value={recoveryCode}
+                onChange={e => setRecoveryCode(e.target.value.replace(/\D/g, ''))}
+                placeholder={customerHasRecoveryCode ? '••••' : '0000'}
+                className={`${inputClass} font-mono tracking-[0.4em]`}
+              />
+              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
+                {isArabic
+                  ? 'يُستخدم لاستعادة ملفك عند تغيير الهاتف. لا تشاركه مع أحد.'
+                  : 'Sert à retrouver votre profil sur un autre appareil. Ne le partagez pas.'}
+              </p>
+            </div>
+
+            <div className="space-y-1 pt-1 border-t border-zinc-200 dark:border-zinc-800/80">
+              <label className={`${labelClass} flex items-center gap-1`}>
                 <Navigation className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400" />
                 <span>{t.gpsLocationLabel}</span>
               </label>
@@ -234,20 +405,136 @@ export const ClientProfile: React.FC = () => {
                   type="url"
                   value={mapUrl}
                   onChange={e => setMapUrl(e.target.value)}
-                  placeholder="Lien Google Maps..."
-                  className="w-full bg-zinc-50 dark:bg-zinc-800 rounded-lg p-1.5 text-xs text-zinc-900 dark:text-white border border-zinc-300 dark:border-zinc-700 font-mono focus:outline-none focus:border-amber-500"
+                  placeholder="https://maps.google.com/..."
+                  className={`${inputClass} font-mono`}
                 />
               </div>
             </div>
+
+            {formError && (
+              <p className="text-[11px] text-red-600 dark:text-red-400 font-semibold leading-relaxed">{formError}</p>
+            )}
+
             <button
               type="submit"
-              className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-lg font-bold shadow-md transition"
+              disabled={isSaving}
+              className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 disabled:opacity-60 text-white rounded-lg font-bold shadow-md transition flex items-center justify-center gap-2"
             >
+              {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               {language === 'ar' ? 'حفظ التعديلات' : 'Enregistrer'}
             </button>
           </form>
         )}
       </div>
+
+      {/* J'ai déjà commandé : récupération par téléphone + code */}
+      {!showRecovery ? (
+        <button
+          onClick={() => setShowRecovery(true)}
+          className="w-full flex items-center justify-center gap-2 py-2.5 text-xs font-bold text-amber-700 dark:text-orange-400 bg-amber-500/10 border border-amber-500/25 rounded-2xl hover:bg-amber-500/15 transition"
+        >
+          <KeyRound className="w-4 h-4" />
+          {isArabic ? 'لقد طلبت سابقاً من هاتف آخر' : 'J’ai déjà commandé (autre appareil)'}
+        </button>
+      ) : (
+        <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-2.5 shadow-sm transition-colors text-xs">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+              <KeyRound className="w-4 h-4 text-amber-600 dark:text-orange-400" />
+              {isArabic ? 'استعادة الملف الشخصي' : 'Récupérer mon profil'}
+            </h3>
+            <button
+              onClick={() => { setShowRecovery(false); setRecoverError(''); }}
+              className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              aria-label={isArabic ? 'إغلاق' : 'Fermer'}
+            >
+              {isArabic ? 'إغلاق' : 'Fermer'}
+            </button>
+          </div>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            {isArabic
+              ? 'أدخل رقم هاتفك والرمز الشخصي الذي حددته عند تسجيلك الأول لربط هذا الجهاز بملفك.'
+              : 'Saisissez votre numéro et le code personnel défini lors de votre première inscription pour rattacher cet appareil à votre profil.'}
+          </p>
+          <form onSubmit={handleRecover} className="space-y-2.5">
+            <div>
+              <label className={labelClass}>{t.phoneNumber}</label>
+              <input
+                type="tel"
+                dir="ltr"
+                value={recoverPhone}
+                onChange={e => setRecoverPhone(e.target.value)}
+                placeholder="05 / 06 / 07 + 8 chiffres"
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>{isArabic ? 'الرمز الشخصي (4 أرقام)' : 'Code personnel (4 chiffres)'}</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                dir="ltr"
+                value={recoverCode}
+                onChange={e => setRecoverCode(e.target.value.replace(/\D/g, ''))}
+                placeholder="••••"
+                className={`${inputClass} font-mono tracking-[0.4em]`}
+              />
+            </div>
+            {recoverError && (
+              <p className="text-[11px] text-red-600 dark:text-red-400 font-semibold leading-relaxed">{recoverError}</p>
+            )}
+            <button
+              type="submit"
+              disabled={isRecovering}
+              className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 disabled:opacity-60 text-white rounded-lg font-bold shadow-md transition flex items-center justify-center gap-2"
+            >
+              {isRecovering && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {isArabic ? 'استعادة' : 'Récupérer'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Effacer mes données */}
+      {hasProfile && (
+        <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-2 shadow-sm transition-colors text-xs">
+          {!confirmErase ? (
+            <button
+              onClick={() => setConfirmErase(true)}
+              className="w-full flex items-center justify-center gap-2 py-2 text-red-600 dark:text-red-400 font-bold border border-red-200 dark:border-red-500/30 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 transition"
+            >
+              <Trash2 className="w-4 h-4" />
+              {isArabic ? 'حذف بياناتي' : 'Effacer mes données'}
+            </button>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex items-start gap-2 text-red-700 dark:text-red-300">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <p className="leading-relaxed font-semibold">
+                  {isArabic
+                    ? 'سيتم حذف ملفك الشخصي نهائياً من هذا الجهاز والخادم. هل تريد المتابعة؟'
+                    : 'Votre profil sera définitivement supprimé de cet appareil et du serveur. Continuer ?'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setConfirmErase(false)}
+                  className="flex-1 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                >
+                  {isArabic ? 'إلغاء' : 'Annuler'}
+                </button>
+                <button
+                  onClick={handleErase}
+                  className="flex-1 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold transition"
+                >
+                  {isArabic ? 'نعم، احذف' : 'Oui, effacer'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Theme Preference Settings Card */}
       <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-4 border border-zinc-250 dark:border-zinc-800 space-y-2 shadow-sm transition-colors">
@@ -258,184 +545,46 @@ export const ClientProfile: React.FC = () => {
       <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-3.5 border border-zinc-250 dark:border-zinc-800 space-y-2 shadow-sm transition-colors">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-orange-400 flex items-center justify-center">
-              <Download className="w-4 h-4" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-zinc-900 dark:text-white">
-                {isArabic ? 'تطبيق الهاتف المحمول (PWA)' : 'Application Mobile (PWA)'}
-              </h4>
-              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                {isArabic ? 'قابل للتثبيت مباشرة على شاشتك الرئيسية' : 'Installable directement sur votre écran d\'accueil'}
-              </p>
-            </div>
+            <Globe className="w-4 h-4 text-amber-600 dark:text-orange-400" />
+            <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+              {isArabic ? 'اللغة' : 'Langue'}
+            </span>
           </div>
-        </div>
-
-        {isInstalled ? (
-          <div className="text-[11px] text-emerald-800 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 p-2 rounded-lg border border-emerald-300 dark:border-emerald-500/20 flex items-center gap-1.5 font-medium">
-            <Check className="w-3.5 h-3.5" />
-            <span>{t.installedPwa}</span>
-          </div>
-        ) : isInstallable ? (
           <button
-            onClick={install}
-            className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-bold rounded-xl shadow-md transition"
+            onClick={() => setLanguage(isArabic ? 'fr' : 'ar')}
+            className="px-3 py-1.5 text-[11px] font-bold text-amber-700 dark:text-orange-400 bg-amber-500/10 border border-amber-500/25 rounded-lg hover:bg-amber-500/15 transition"
           >
-            {t.installPwa}
-          </button>
-        ) : isIOS ? (
-          <button
-            onClick={() => setShowIOSModal(true)}
-            className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold rounded-xl border border-zinc-300 dark:border-zinc-700 transition"
-          >
-            {isArabic ? 'تثبيت على iPhone / iPad (iOS)' : 'Installer sur iPhone / iPad (iOS)'}
-          </button>
-        ) : (
-          <p className="text-[10px] text-zinc-500 italic">
-            {isArabic ? 'متوافق مع كروم، سفاري، أندرويد وآيفون' : 'Compatible Chrome, Safari, Android & iOS'}
-          </p>
-        )}
-      </div>
-
-      {/* Orders History & Reorder */}
-      <div className="space-y-2.5">
-        <h4 className="text-xs font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
-          {t.orderHistory} ({customerOrders.length})
-        </h4>
-
-        {customerOrders.length === 0 ? (
-          <div className="bg-white dark:bg-zinc-900/60 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 text-center text-xs text-zinc-500 shadow-sm">
-            {t.noPastOrders}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {customerOrders.map(order => (
-              <div
-                key={order.id}
-                className="bg-white dark:bg-zinc-900/90 p-3 rounded-xl border border-zinc-250 dark:border-zinc-800 space-y-2 text-xs shadow-sm transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-amber-700 dark:text-amber-400">{order.orderNumber}</span>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      order.status === 'delivered'
-                        ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400'
-                        : order.status === 'cancelled'
-                        ? 'bg-red-50 dark:bg-red-950 text-red-800 dark:text-red-400'
-                        : 'bg-orange-50 dark:bg-orange-950 text-orange-800 dark:text-orange-400 animate-pulse'
-                    }`}
-                  >
-                    {order.status === 'delivered'
-                      ? t.statusDelivered
-                      : order.status === 'cancelled'
-                      ? t.statusCancelled
-                      : t.statusPreparing}
-                  </span>
-                </div>
-
-                <div className="text-[11px] text-zinc-700 dark:text-zinc-300">
-                  {order.items.map(it => `${it.quantity}x ${isArabic ? it.nameAr : it.nameFr}`).join(', ')}
-                </div>
-
-                <div className="flex items-center justify-between pt-1 border-t border-zinc-200 dark:border-zinc-800/80">
-                  <span className="font-extrabold text-zinc-900 dark:text-white">
-                    {order.total.toLocaleString()} {t.currency}
-                  </span>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setClientActiveOrder(order);
-                        setClientTab('tracking');
-                      }}
-                      className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-[10px] border border-zinc-250 dark:border-transparent transition"
-                    >
-                      {t.viewTracking}
-                    </button>
-                    <button
-                      onClick={() => reorderPastOrder(order)}
-                      className="px-2.5 py-1 rounded bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm transition active:scale-95"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>{t.reorder}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Language Switch */}
-      <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-3 border border-zinc-250 dark:border-zinc-800 flex items-center justify-between shadow-sm transition-colors">
-        <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300 font-medium">
-          <Globe className="w-4 h-4 text-amber-600 dark:text-orange-400" />
-          <span>{isArabic ? 'لغة التطبيق' : 'Langue de l\'application'}</span>
-        </div>
-        <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg border border-zinc-300 dark:border-zinc-700">
-          <button
-            onClick={() => setLanguage('fr')}
-            className={`px-2.5 py-1 rounded text-xs font-bold transition ${
-              language === 'fr' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm' : 'text-zinc-600 dark:text-zinc-400'
-            }`}
-          >
-            Français
-          </button>
-          <button
-            onClick={() => setLanguage('ar')}
-            className={`px-2.5 py-1 rounded text-xs font-bold transition ${
-              language === 'ar' ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm' : 'text-zinc-600 dark:text-zinc-400'
-            }`}
-          >
-            عربي
+            {isArabic ? 'Français' : 'العربية'}
           </button>
         </div>
       </div>
 
-      {/* Restaurant Contact Details */}
-      <div className="bg-white dark:bg-zinc-900/60 rounded-2xl p-3.5 border border-zinc-250 dark:border-zinc-800 space-y-1.5 text-xs text-zinc-600 dark:text-zinc-400 shadow-sm transition-colors">
-        <h5 className="font-bold text-zinc-900 dark:text-zinc-200">{isArabic ? 'سلطان الدجاج (Sultan Ed-Djaj)' : 'Sultan Ed-Djaj (سلطان الدجاج)'}</h5>
-        <p>{isArabic ? 'حي البساتين، بئر خادم — نقطة استدلال: مقابل تقنيكوم ثانوية زحوال' : 'Les Vergers, Birkhadem — Point de repère : En face Technicum Lycée Zahoual'}</p>
-        <p>{isArabic ? 'مفتوح 24 سا / 24 سا (7 أيام / 7)' : 'Ouvert 24h / 24h (7j/7)'}</p>
-        <p className="text-amber-700 dark:text-orange-400 font-mono font-semibold" dir="ltr">{settings.phone}</p>
-      </div>
+      {/* PWA install / iOS hint */}
+      {!isInstalled && (isInstallable || isIOS) && (
+        <div className="bg-white dark:bg-zinc-900/90 rounded-2xl p-3.5 border border-zinc-250 dark:border-zinc-800 shadow-sm transition-colors">
+          {isIOS ? (
+            <button onClick={() => setShowIOSModal(true)} className="text-xs font-bold text-amber-700 dark:text-orange-400">
+              {isArabic ? 'إضافة إلى الشاشة الرئيسية (iPhone)' : 'Ajouter à l’écran d’accueil (iPhone)'}
+            </button>
+          ) : (
+            <button onClick={install} className="text-xs font-bold text-amber-700 dark:text-orange-400">
+              {isArabic ? 'تثبيت التطبيق' : 'Installer l’application'}
+            </button>
+          )}
+        </div>
+      )}
 
-      {/* Logout button */}
-      <button
-        onClick={logoutCustomer}
-        className="w-full py-2.5 rounded-xl border border-zinc-300 dark:border-zinc-800 hover:border-red-500/40 text-zinc-600 dark:text-zinc-400 hover:text-red-600 dark:hover:text-red-400 text-xs font-semibold flex items-center justify-center gap-2 transition"
-      >
-        <LogOut className="w-3.5 h-3.5" />
-        <span>{t.logout}</span>
-      </button>
-
-      {/* iOS Safari Installation Guide Modal */}
       {showIOSModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/70 p-4">
-          <div className="w-full max-w-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-2xl p-5 shadow-2xl space-y-3 text-start">
-            <h4 className="text-sm font-bold text-zinc-900 dark:text-white">
-              {isArabic ? 'التثبيت على iPhone / iPad' : 'Installer sur iPhone / iPad'}
-            </h4>
-            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
-              {isArabic ? (
-                <>
-                  1. اضغط على زر <strong>مشاركة (Partager)</strong> <span className="text-blue-500">⎋</span> في شريط Safari.<br />
-                  2. انزل للأسفل واضغط على <strong>إضافة إلى الشاشة الرئيسية (Sur l'écran d'accueil)</strong>.
-                </>
-              ) : (
-                <>
-                  1. Appuyez sur le bouton <strong>Partager</strong> <span className="text-blue-500">⎋</span> dans la barre d'outils Safari.<br />
-                  2. Faites défiler vers le bas et appuyez sur <strong>Sur l'écran d'accueil</strong>.
-                </>
-              )}
+        <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4" onClick={() => setShowIOSModal(false)}>
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 max-w-[320px] space-y-2 text-xs text-zinc-800 dark:text-zinc-200" onClick={e => e.stopPropagation()}>
+            <h4 className="font-bold text-sm">{isArabic ? 'إضافة إلى الشاشة الرئيسية' : 'Ajouter à l’écran d’accueil'}</h4>
+            <p className="leading-relaxed">
+              {isArabic
+                ? '١. اضغط على زر المشاركة في سفاري · ٢. اختر «إضافة إلى الشاشة الرئيسية»'
+                : '1. Touchez le bouton Partager dans Safari · 2. Choisissez « Sur l’écran d’accueil »'}
             </p>
-            <button
-              onClick={() => setShowIOSModal(false)}
-              className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold rounded-xl transition"
-            >
-              {isArabic ? 'إغلاق' : 'Fermer'}
+            <button onClick={() => setShowIOSModal(false)} className="w-full py-2 bg-gradient-to-r from-orange-600 to-amber-600 text-white rounded-xl font-bold">
+              {isArabic ? 'فهمت' : 'Compris'}
             </button>
           </div>
         </div>

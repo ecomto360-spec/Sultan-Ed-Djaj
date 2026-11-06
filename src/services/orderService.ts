@@ -29,6 +29,7 @@ export interface DeliveryAddressPayload {
 export interface CreateOrderRequest {
   clientRequestId: string;
   accessToken: string;
+  deviceId?: string;
   customerId?: string;
   customerName: string;
   customerPhone: string;
@@ -187,13 +188,24 @@ export async function fetchOrdersRemote(limit = 300): Promise<Order[]> {
   return Array.isArray(data.orders) ? data.orders : [];
 }
 
-export async function fetchOrderRemote(orderId: string): Promise<Order> {
+// « Mes commandes » : uniquement les commandes passées depuis cet appareil.
+export async function fetchMyOrdersRemote(deviceId: string): Promise<Order[]> {
+  const response = await fetch(
+    `/api/orders/mine?deviceId=${encodeURIComponent(deviceId)}`,
+    { headers: { Accept: 'application/json' } }
+  );
+  const data = await parseOrderResponse<{ orders: Order[] }>(response);
+  return Array.isArray(data.orders) ? data.orders : [];
+}
+
+export async function fetchOrderRemote(orderId: string, accessTokenOverride?: string): Promise<Order> {
   const credentials = getOrderCredentials(orderId);
+  const accessToken = accessTokenOverride || credentials.accessToken;
   const useStaffToken = Boolean(getAdminToken());
   const requester = useStaffToken ? authFetch : fetch;
   const response = await requester(`/api/orders/${encodeURIComponent(orderId)}`, {
-    headers: credentials.accessToken && !useStaffToken
-      ? { 'x-order-access-token': credentials.accessToken }
+    headers: accessToken && !useStaffToken
+      ? { 'x-order-access-token': accessToken }
       : undefined,
   });
 

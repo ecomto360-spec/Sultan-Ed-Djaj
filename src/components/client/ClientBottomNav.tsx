@@ -9,6 +9,8 @@ export const ClientBottomNav: React.FC = () => {
     setClientTab,
     cartItemsCount,
     clientActiveOrder,
+    clientOrdersUnseen,
+    clearClientOrdersUnseen,
     language,
   } = useApp();
   const t = TRANSLATIONS[language];
@@ -66,7 +68,10 @@ export const ClientBottomNav: React.FC = () => {
 
       {/* Orders / Tracking */}
       <button
-        onClick={() => setClientTab('tracking')}
+        onClick={() => {
+          clearClientOrdersUnseen();
+          setClientTab('tracking');
+        }}
         className={`relative flex-1 min-h-[44px] flex flex-col items-center justify-center gap-1 rounded-xl transition ${
           clientTab === 'tracking'
             ? 'text-orange-600 dark:text-orange-400 font-bold'
@@ -78,8 +83,13 @@ export const ClientBottomNav: React.FC = () => {
           {hasActiveOrder && (
             <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900 animate-pulse" />
           )}
+          {clientOrdersUnseen.length > 0 && (
+            <span className="absolute -top-1.5 -right-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center shadow-md ring-2 ring-white dark:ring-zinc-900">
+              {clientOrdersUnseen.length > 9 ? '9+' : clientOrdersUnseen.length}
+            </span>
+          )}
         </div>
-        <span className="text-[10px] leading-none font-extrabold">{t.navOrders}</span>
+        <span className="text-[10px] leading-none font-extrabold">{isArabic ? 'طلباتي' : 'Mes commandes'}</span>
       </button>
 
       {/* Profile */}

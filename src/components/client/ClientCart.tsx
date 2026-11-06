@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { OrderType } from '../../types';
+import { soundService } from '../../services/sound';
 import { GeolocationPicker } from './GeolocationPicker';
 import {
   ShoppingBag,
@@ -17,6 +19,7 @@ import {
   Clock,
   MessageSquare,
   Loader2,
+  User,
 } from 'lucide-react';
 
 interface SavedAddress {
@@ -42,6 +45,7 @@ export const ClientCart: React.FC = () => {
     isStoreActuallyOpen,
     setClientTab,
   } = useApp();
+  const navigate = useNavigate();
 
   const t = TRANSLATIONS[language];
   const isArabic = language === 'ar';
@@ -152,12 +156,33 @@ export const ClientCart: React.FC = () => {
     setFormError(null);
     setSubmitFailed(false);
 
+    // Débloque l'audio sur ce geste utilisateur : les navigateurs bloquent la
+    // lecture tant qu'aucune interaction n'a eu lieu (sonneries de suivi).
+    soundService.unlockAudio();
+
     if (!isStoreActuallyOpen) {
       setFormError(t.storeClosedCannotOrder);
       return;
     }
 
     if (cart.length === 0) return;
+
+    // Sans profil sur cet appareil : redirection vers le formulaire (vide),
+    // puis retour automatique au panier après l'enregistrement.
+    if (!currentCustomer) {
+      try {
+        sessionStorage.setItem('sultan_profile_return_cart', '1');
+      } catch {
+        // ignore
+      }
+      setFormError(
+        isArabic
+          ? 'يرجى إكمال الملف الشخصي (الاسم، الهاتف، العنوان) لإتمام الطلب.'
+          : 'Veuillez compléter votre profil (nom, téléphone, adresse) pour finaliser la commande.'
+      );
+      setClientTab('profile');
+      return;
+    }
 
     if (orderType === 'delivery' && !selectedAddress.address.trim()) {
       setFormError(
@@ -208,7 +233,13 @@ export const ClientCart: React.FC = () => {
       }
 
       clearCheckoutAttempt();
-      setConfirmedOrderNumber(order.orderNumber);
+
+      // Redirection automatique vers la page de suivi de la commande.
+      try {
+        navigate(`/commande/${encodeURIComponent(order.id)}`);
+      } catch {
+        setConfirmedOrderNumber(order.orderNumber);
+      }
     } catch (err: any) {
       setSubmitFailed(true);
       setFormError(
@@ -345,6 +376,56 @@ export const ClientCart: React.FC = () => {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Récap profil : pré-rempli, modifiable en un clic */}
+      <div className="bg-white dark:bg-[#16161a] p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-1.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-orange-400 flex items-center justify-center shrink-0">
+              <User className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-black text-zinc-900 dark:text-zinc-100 truncate">
+                {currentCustomer ? currentCustomer.name : (isArabic ? 'الملف الشخصي غير مكتمل' : 'Profil incomplet')}
+              </p>
+              {currentCustomer ? (
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono truncate" dir="ltr">
+                  {currentCustomer.phone}
+                </p>
+              ) : (
+                <p className="text-[11px] text-amber-700 dark:text-orange-400">
+                  {isArabic ? 'أكمل الملف لإتمام الطلب' : 'Complétez pour finaliser'}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                sessionStorage.setItem('sultan_profile_return_cart', '1');
+              } catch {
+                // ignore
+              }
+              setClientTab('profile');
+            }}
+            className="shrink-0 text-[11px] font-bold text-amber-700 dark:text-orange-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20"
+          >
+            {currentCustomer
+              ? (isArabic ? 'تعديل معلوماتي' : 'Modifier mes infos')
+              : (isArabic ? 'إكمال الملف' : 'Compléter')}
+          </button>
+        </div>
+        {currentCustomer && orderType === 'delivery' && (
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 flex items-start gap-1.5 pt-0.5">
+            <MapPin className="w-3 h-3 mt-0.5 shrink-0 text-amber-600 dark:text-orange-400" />
+            <span className="leading-relaxed">
+              {currentCustomer.address || selectedAddress.address || '—'}
+              {currentCustomer.commune ? `, ${currentCustomer.commune}` : ''}
+            </span>
+          </p>
+        )}
       </div>
 
       {/* Mode Toggle: Livraison vs À emporter */}

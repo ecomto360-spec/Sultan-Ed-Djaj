@@ -150,6 +150,8 @@ export interface Order {
   isNewAlert?: boolean;
   stockDeducted?: boolean; // indicates if ingredients were deducted on preparing
   dayId?: string;
+  // Appareil client (identité anonyme UUID) : sert au suivi « Mes commandes »
+  deviceId?: string;
   paymentMethod?: PaymentMethod; // 'cash' | 'card' | 'other' (default 'cash')
   driverName?: string;
   driverFee?: number;

@@ -488,6 +488,13 @@ export async function buildOrderInsert(body, staffSession, catalogById) {
   const isArabic = body.language === 'ar';
   const nowIso = new Date().toISOString();
 
+  // Appareil client (identité anonyme UUID) : sert uniquement au suivi
+  // « Mes commandes » de cet appareil. Null pour les commandes saisies au
+  // comptoir et pour les anciennes commandes (colonne nullable).
+  const deviceId = !staffSession && UUID_RE.test(String(body.deviceId || '').trim())
+    ? String(body.deviceId).trim().toLowerCase()
+    : null;
+
   const sentToWhatsApp = staffSession ? Boolean(body.sentToWhatsApp) : false;
   const sentAt = sentToWhatsApp
     ? (body.sentAt && !Number.isNaN(new Date(body.sentAt).getTime()) ? new Date(body.sentAt).toISOString() : nowIso)
@@ -496,6 +503,7 @@ export async function buildOrderInsert(body, staffSession, catalogById) {
   const insert = {
     client_request_id: clientRequestId,
     access_token_hash: hashOrderAccessToken(suppliedAccessToken),
+    device_id: deviceId,
     type: dbType,
     source,
     statut,
@@ -568,6 +576,7 @@ export function mapDbRowToOrder(row) {
     isNewAlert: Boolean(row.is_new_alert),
     stockDeducted: Boolean(row.stock_deducted),
     dayId: row.day_id || undefined,
+    deviceId: row.device_id || undefined,
     paymentMethod: row.payment_method || 'cash',
     driverName: row.driver_name || undefined,
     driverFee: row.driver_fee === null || row.driver_fee === undefined ? undefined : toNumber(row.driver_fee),

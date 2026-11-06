@@ -81,6 +81,93 @@ class SoundService {
       // ignore
     }
   }
+
+  // Débloque l'audio sur un geste utilisateur (clic « Commander ») : les
+  // navigateurs bloquent la lecture tant qu'aucune interaction n'a eu lieu.
+  // On reprend l'AudioContext et l'on joue un fragment quasi silencieux.
+  unlockAudio(): boolean {
+    try {
+      this.initCtx();
+      if (!this.audioCtx) return false;
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume();
+      }
+      const buffer = this.audioCtx.createBuffer(1, 1, 22050);
+      const source = this.audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioCtx.destination);
+      source.start(0);
+      return this.audioCtx.state === 'running';
+    } catch {
+      return false;
+    }
+  }
+
+  isAudioUnlocked(): boolean {
+    try {
+      return Boolean(this.audioCtx) && this.audioCtx?.state === 'running';
+    } catch {
+      return false;
+    }
+  }
+
+  private playTone(
+    freq: number,
+    startAt: number,
+    duration: number,
+    volume: number,
+    type: OscillatorType = 'triangle',
+    endFreq?: number
+  ) {
+    if (!this.audioCtx) return;
+    const osc = this.audioCtx.createOscillator();
+    const gain = this.audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, startAt);
+    if (endFreq) {
+      osc.frequency.exponentialRampToValueAtTime(endFreq, startAt + duration * 0.8);
+    }
+    gain.gain.setValueAtTime(0.001, startAt);
+    gain.gain.linearRampToValueAtTime(volume, startAt + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+    osc.connect(gain);
+    gain.connect(this.audioCtx.destination);
+    osc.start(startAt);
+    osc.stop(startAt + duration + 0.02);
+  }
+
+  // Sonneries courtes côté client (≈1–2 s, volume modéré). Le son « Prête »
+  // et « En livraison » est plus marqué : triple note montante plus intense.
+  playClientStatusChime(status: 'preparing' | 'ready' | 'delivering' | 'delivered' | 'cancelled') {
+    try {
+      this.initCtx();
+      if (!this.audioCtx) return;
+
+      const now = this.audioCtx.currentTime;
+      switch (status) {
+        case 'preparing':
+          this.playTone(659.25, now, 0.28, 0.22);
+          this.playTone(880, now + 0.22, 0.42, 0.22);
+          break;
+        case 'ready':
+        case 'delivering':
+          this.playTone(587.33, now, 0.22, 0.3);
+          this.playTone(783.99, now + 0.18, 0.22, 0.3);
+          this.playTone(1046.5, now + 0.36, 0.55, 0.32);
+          break;
+        case 'delivered':
+          this.playTone(783.99, now, 0.25, 0.2, 'sine');
+          this.playTone(1046.5, now + 0.2, 0.5, 0.2, 'sine');
+          break;
+        case 'cancelled':
+          this.playTone(220, now, 0.5, 0.25, 'sawtooth', 140);
+          this.playTone(185, now + 0.4, 0.6, 0.22, 'sawtooth', 110);
+          break;
+      }
+    } catch {
+      // Audio bloqué : l'UI propose le bouton « Activer le son ».
+    }
+  }
 }
 
 export const soundService = new SoundService();
