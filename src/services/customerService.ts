@@ -11,6 +11,14 @@ export function isValidClientPhone(phone: string): boolean {
   return ALGERIA_MOBILE_PHONE_RE.test(String(phone || '').replace(/[\s.-]/g, ''));
 }
 
+export interface RecentAddress {
+  address: string;
+  landmark?: string | null;
+  mapUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
 export interface CustomerProfile {
   id: string;
   name: string;
@@ -22,6 +30,7 @@ export interface CustomerProfile {
   mapUrl?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  recentAddresses?: RecentAddress[];
   hasRecoveryCode: boolean;
   orderCount: number;
   totalSpent: number;
@@ -39,6 +48,7 @@ export interface CustomerProfileInput {
   mapUrl?: string;
   latitude?: number;
   longitude?: number;
+  recentAddresses?: RecentAddress[];
   recoveryCode?: string;
 }
 

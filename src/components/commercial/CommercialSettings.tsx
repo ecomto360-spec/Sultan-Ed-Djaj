@@ -30,6 +30,8 @@ import {
   CheckCircle2,
   XCircle,
   Bell,
+  HardDriveDownload,
+  Loader2,
 } from 'lucide-react';
 import {
   fetchTeamAccounts,
@@ -40,6 +42,7 @@ import {
   changeAccountPin,
   fetchAuthAuditLogs,
   getStoredAdminRole,
+  authFetch,
   TeamAccountApi,
   AuthAuditLogApi,
 } from '../../services/authService';
@@ -152,6 +155,62 @@ export const CommercialSettings: React.FC = () => {
       resetToSeedData();
       setResetSuccess(true);
       setTimeout(() => setResetSuccess(false), 2500);
+    }
+  };
+
+  // ─── Sauvegarde manuelle : export JSON côté client ────────────────────
+  // Récupère catalogue + clients + 500 dernières commandes + réglages puis
+  // télécharge un fichier JSON. Les codes PIN ne sont JAMAIS inclus.
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportBackup = async () => {
+    setIsExporting(true);
+    try {
+      const [ordersRes, customersRes, catalogRes] = await Promise.all([
+        authFetch('/api/orders?limit=500'),
+        authFetch('/api/customers'),
+        fetch('/api/catalog', { headers: { Accept: 'application/json' } }),
+      ]);
+
+      const ordersData = ordersRes.ok ? await ordersRes.json() : null;
+      const customersData = customersRes.ok ? await customersRes.json() : null;
+      const catalogData = catalogRes.ok ? await catalogRes.json() : null;
+
+      // Réglages sans les codes PIN (fichier potentiellement partagé/déplacé).
+      const { managerPin, cookPin, cashierPin, ...safeSettings } = settings as unknown as Record<string, unknown>;
+
+      const backup = {
+        app: 'Sultan Ed-Djaj',
+        format: 'sultan-backup',
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        counts: {
+          orders: Array.isArray(ordersData?.orders) ? ordersData.orders.length : 0,
+          customers: Array.isArray(customersData?.customers) ? customersData.customers.length : 0,
+        },
+        settings: safeSettings,
+        clientSettings,
+        catalog: catalogData?.catalog ?? null,
+        customers: customersData?.customers ?? [],
+        orders: ordersData?.orders ?? [],
+      };
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `sultan-ed-djaj-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(
+        err?.message ||
+          (isArabic ? 'فشل تصدير النسخة الاحتياطية.' : 'L’export de la sauvegarde a échoué.')
+      );
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -643,6 +702,37 @@ export const CommercialSettings: React.FC = () => {
               isArabic={isArabic}
             />
           )}
+
+          {/* Sauvegarde manuelle (export JSON téléchargeable) */}
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 sm:p-5 border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-2 text-xs">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+              <HardDriveDownload className="w-4 h-4 text-orange-500" />
+              <span>{isArabic ? 'نسخة احتياطية (تصدير)' : 'Sauvegarde (export)'}</span>
+            </h3>
+            <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              {isArabic
+                ? 'يقوم بتنزيل ملف JSON يحتوي على الكتالوج والعملاء وآخر 500 طلب والإعدادات. رموز PIN غير مدرجة أبداً. خطة Supabase المجانية لا توفر نسخاً احتياطية تلقائية : يُنصح بتصدير أسبوعي.'
+                : 'Télécharge un fichier JSON contenant le catalogue, les clients, les 500 dernières commandes et les réglages. Les codes PIN ne sont jamais inclus. L’offre gratuite Supabase ne fournit pas de sauvegarde automatique : un export hebdomadaire est recommandé.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleExportBackup()}
+              disabled={isExporting}
+              className="px-4 py-2.5 min-h-[44px] bg-orange-50 hover:bg-orange-100 dark:bg-orange-950/60 dark:hover:bg-orange-900 text-orange-700 dark:text-orange-300 font-bold rounded-xl border border-orange-300 dark:border-orange-700/50 transition mt-1 disabled:opacity-60 disabled:cursor-wait flex items-center gap-2"
+            >
+              {isExporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{isArabic ? 'جارٍ التحضير...' : 'Préparation...'}</span>
+                </>
+              ) : (
+                <>
+                  <HardDriveDownload className="w-4 h-4" />
+                  <span>{isArabic ? 'تنزيل النسخة الاحتياطية (JSON)' : 'Télécharger la sauvegarde (JSON)'}</span>
+                </>
+              )}
+            </button>
+          </div>
 
           {/* Reset Seed Data */}
           <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 sm:p-5 border border-red-200 dark:border-red-900/40 shadow-xs space-y-2 text-xs">

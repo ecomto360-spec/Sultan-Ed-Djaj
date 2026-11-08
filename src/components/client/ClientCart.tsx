@@ -1,10 +1,11 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { OrderType } from '../../types';
 import { soundService } from '../../services/sound';
-import { GeolocationPicker } from './GeolocationPicker';
+import { isValidClientPhone } from '../../services/customerService';
+import { GeolocationPicker, DeliveryAddressData } from './GeolocationPicker';
 import {
   ShoppingBag,
   Trash2,
@@ -14,22 +15,13 @@ import {
   Store,
   AlertCircle,
   ArrowRight,
-  MapPin,
   CheckCircle2,
   Clock,
   MessageSquare,
   Loader2,
   User,
+  Phone,
 } from 'lucide-react';
-
-interface SavedAddress {
-  address: string;
-  commune: string;
-  wilaya: string;
-  landmark?: string;
-  latitude?: number;
-  longitude?: number;
-}
 
 export const ClientCart: React.FC = () => {
   const {
@@ -39,6 +31,7 @@ export const ClientCart: React.FC = () => {
     removeFromCart,
     clearCart,
     placeOrder,
+    saveCustomerProfile,
     settings,
     currentCustomer,
     language,
@@ -54,21 +47,52 @@ export const ClientCart: React.FC = () => {
   const [kitchenNotes, setKitchenNotes] = useState('');
   const [pickupTimeSlot, setPickupTimeSlot] = useState(t.asap);
 
-  // Address state populated from GeolocationPicker
-  const [selectedAddress, setSelectedAddress] = useState<SavedAddress>({
+  // Coordonnées client (Tâche C) : saisies ici, pré-remplies depuis le profil.
+  const [customerName, setCustomerName] = useState(currentCustomer?.name || '');
+  const [customerPhone, setCustomerPhone] = useState(currentCustomer?.phone || '');
+
+  // Pré-remplissage / synchronisation : au chargement du profil ou quand il
+  // CHANGE (récupération sur autre appareil), sans jamais écraser la saisie
+  // en cours du même profil.
+  const lastProfileIdRef = useRef<string | null>(currentCustomer?.id || null);
+  useEffect(() => {
+    if (!currentCustomer) {
+      lastProfileIdRef.current = null;
+      return;
+    }
+    if (lastProfileIdRef.current === currentCustomer.id) return;
+    lastProfileIdRef.current = currentCustomer.id;
+    setCustomerName(currentCustomer.name || '');
+    setCustomerPhone(currentCustomer.phone || '');
+  }, [currentCustomer]);
+
+  // Adresse de livraison fournie par GeolocationPicker (GPS, profil ou autre).
+  const [selectedAddress, setSelectedAddress] = useState<DeliveryAddressData>({
     address: currentCustomer?.address || '',
-    commune: currentCustomer?.commune || 'Birkhadem',
-    wilaya: currentCustomer?.wilaya || 'Alger',
     landmark: currentCustomer?.landmark || '',
     latitude: currentCustomer?.latitude,
     longitude: currentCustomer?.longitude,
+    otherAddressUsed: false,
   });
+
+  // Validation champ par champ : message affiché SOUS le champ concerné.
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [addressError, setAddressError] = useState<string | null>(null);
 
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitFailed, setSubmitFailed] = useState(false);
   const [confirmedOrderNumber, setConfirmedOrderNumber] = useState<string | null>(null);
   const submitLockRef = useRef(false);
+
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const addressCardRef = useRef<HTMLDivElement>(null);
+
+  const trimmedName = customerName.trim();
+  const normalizedPhone = customerPhone.replace(/[\s.-]/g, '');
+  const profileComplete = trimmedName.length >= 2 && isValidClientPhone(normalizedPhone);
 
   const deliveryFee = orderType === 'delivery' ? settings.deliveryFee : 0;
   const grandTotal = cartTotal + deliveryFee;
@@ -100,8 +124,8 @@ export const ClientCart: React.FC = () => {
       selectedAddress,
       pickupTimeSlot,
       kitchenNotes: kitchenNotes.trim(),
-      customerId: currentCustomer?.id,
-      customerPhone: currentCustomer?.phone,
+      customerName: trimmedName,
+      customerPhone: normalizedPhone,
     });
     const storageKey = 'sultan_checkout_attempt_v1';
 
@@ -150,11 +174,88 @@ export const ClientCart: React.FC = () => {
     }
   };
 
+  // Réception de l'adresse du picker : efface l'erreur dès qu'elle est valide.
+  const handleAddressSelect = (data: DeliveryAddressData) => {
+    setSelectedAddress(data);
+    if (data.address.trim()) setAddressError(null);
+  };
+
+  // « Compléter » : défile jusqu'au champ manquant et lui donne le focus.
+  const handleCompleteProfile = () => {
+    if (trimmedName.length < 2) {
+      nameInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nameInputRef.current?.focus();
+    } else if (!isValidClientPhone(normalizedPhone)) {
+      phoneInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      phoneInputRef.current?.focus();
+    }
+  };
+
+  // Enregistrement automatique du profil après une commande réussie :
+  // nom, téléphone et adresse principale (GPS) ; « Autre adresse » ne remplace
+  // PAS l'adresse principale, elle alimente la liste « Adresses récentes ».
+  const persistProfileAfterOrder = async () => {
+    try {
+      const profile = currentCustomer || null;
+      const usedOther = selectedAddress.otherAddressUsed;
+      const mapUrl =
+        selectedAddress.latitude != null && selectedAddress.longitude != null
+          ? `https://maps.google.com/?q=${selectedAddress.latitude},${selectedAddress.longitude}`
+          : undefined;
+
+      const mainAddress = usedOther
+        ? {
+            address: profile?.address || '',
+            landmark: profile?.landmark || undefined,
+            mapUrl: profile?.mapUrl,
+            latitude: profile?.latitude,
+            longitude: profile?.longitude,
+          }
+        : {
+            address: selectedAddress.address.trim() || profile?.address || '',
+            landmark: selectedAddress.landmark || profile?.landmark || undefined,
+            mapUrl,
+            latitude: selectedAddress.latitude ?? profile?.latitude,
+            longitude: selectedAddress.longitude ?? profile?.longitude,
+          };
+
+      const previousRecent = profile?.recentAddresses || [];
+      const otherText = usedOther ? selectedAddress.address.trim() : '';
+      const recentAddresses = otherText
+        ? [
+            {
+              address: otherText,
+              landmark: selectedAddress.landmark || null,
+              mapUrl: mapUrl || null,
+              latitude: selectedAddress.latitude ?? null,
+              longitude: selectedAddress.longitude ?? null,
+            },
+            ...previousRecent.filter(r => r.address !== otherText),
+          ].slice(0, 3)
+        : previousRecent;
+
+      await saveCustomerProfile({
+        name: trimmedName,
+        phone: normalizedPhone,
+        wilaya: profile?.wilaya,
+        commune: profile?.commune,
+        ...mainAddress,
+        recentAddresses,
+      });
+    } catch {
+      // La commande est déjà enregistrée : l'échec du profil ne doit jamais
+      // bloquer la redirection vers le suivi. La prochaine commande réessayera.
+    }
+  };
+
   const handleConfirmOrder = async () => {
     if (submitLockRef.current) return;
 
     setFormError(null);
     setSubmitFailed(false);
+    setNameError(null);
+    setPhoneError(null);
+    setAddressError(null);
 
     // Débloque l'audio sur ce geste utilisateur : les navigateurs bloquent la
     // lecture tant qu'aucune interaction n'a eu lieu (sonneries de suivi).
@@ -167,34 +268,38 @@ export const ClientCart: React.FC = () => {
 
     if (cart.length === 0) return;
 
-    // Sans profil sur cet appareil : redirection vers le formulaire (vide),
-    // puis retour automatique au panier après l'enregistrement.
-    if (!currentCustomer) {
-      try {
-        sessionStorage.setItem('sultan_profile_return_cart', '1');
-      } catch {
-        // ignore
-      }
-      setFormError(
-        isArabic
-          ? 'يرجى إكمال الملف الشخصي (الاسم، الهاتف، العنوان) لإتمام الطلب.'
-          : 'Veuillez compléter votre profil (nom, téléphone, adresse) pour finaliser la commande.'
+    // Validation champ par champ : le premier champ invalide reçoit le focus.
+    if (trimmedName.length < 2) {
+      setNameError(
+        isArabic ? 'يرجى إدخال الاسم واللقب (حرفان على الأقل).' : 'Veuillez saisir votre nom et prénom (2 caractères minimum).'
       );
-      setClientTab('profile');
+      nameInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nameInputRef.current?.focus();
+      return;
+    }
+
+    if (!isValidClientPhone(normalizedPhone)) {
+      setPhoneError(
+        isArabic ? 'رقم هاتف غير صحيح : 05 أو 06 أو 07 متبوعاً بـ 8 أرقام.' : 'Téléphone invalide : 05, 06 ou 07 suivi de 8 chiffres.'
+      );
+      phoneInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      phoneInputRef.current?.focus();
       return;
     }
 
     if (orderType === 'delivery' && !selectedAddress.address.trim()) {
-      setFormError(
+      setAddressError(
         isArabic
-          ? 'يرجى إدخال عنوان التوصيل أو استخدام خاصية تحديد الموقع.'
-          : 'Veuillez renseigner votre adresse de livraison.'
+          ? 'يرجى تحديد موقعك أو إدخال عنوان التوصيل.'
+          : 'Utilisez votre position, une adresse récente, ou cochez « Autre adresse ».'
       );
+      addressCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
 
     const attempt = getCheckoutAttempt();
     const itemsSnapshot = [...cart];
+    const addressSnapshot = { ...selectedAddress };
 
     submitLockRef.current = true;
     setIsSubmitting(true);
@@ -205,19 +310,21 @@ export const ClientCart: React.FC = () => {
         items: itemsSnapshot,
         clientRequestId: attempt.clientRequestId,
         accessToken: attempt.accessToken,
+        customerName: trimmedName,
+        customerPhone: normalizedPhone,
         deliveryAddress:
           orderType === 'delivery'
             ? {
-                wilaya: selectedAddress.wilaya || 'Alger',
-                commune: selectedAddress.commune || 'Birkhadem',
-                address: selectedAddress.address,
-                landmark: selectedAddress.landmark,
+                wilaya: currentCustomer?.wilaya || 'Alger',
+                commune: currentCustomer?.commune || 'Birkhadem',
+                address: addressSnapshot.address.trim(),
+                landmark: addressSnapshot.landmark,
                 mapUrl:
-                  selectedAddress.latitude && selectedAddress.longitude
-                    ? `https://maps.google.com/?q=${selectedAddress.latitude},${selectedAddress.longitude}`
+                  addressSnapshot.latitude != null && addressSnapshot.longitude != null
+                    ? `https://maps.google.com/?q=${addressSnapshot.latitude},${addressSnapshot.longitude}`
                     : undefined,
-                latitude: selectedAddress.latitude,
-                longitude: selectedAddress.longitude,
+                latitude: addressSnapshot.latitude,
+                longitude: addressSnapshot.longitude,
               }
             : undefined,
         pickupTimeSlot: orderType === 'pickup' ? pickupTimeSlot : undefined,
@@ -233,6 +340,10 @@ export const ClientCart: React.FC = () => {
       }
 
       clearCheckoutAttempt();
+
+      // Sauvegarde automatique du profil (nom, téléphone, adresse principale,
+      // adresses récentes) — sans jamais bloquer le suivi de la commande.
+      void persistProfileAfterOrder();
 
       // Redirection automatique vers la page de suivi de la commande.
       try {
@@ -378,54 +489,98 @@ export const ClientCart: React.FC = () => {
         ))}
       </div>
 
-      {/* Récap profil : pré-rempli, modifiable en un clic */}
-      <div className="bg-white dark:bg-[#16161a] p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-1.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-orange-400 flex items-center justify-center shrink-0">
-              <User className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-black text-zinc-900 dark:text-zinc-100 truncate">
-                {currentCustomer ? currentCustomer.name : (isArabic ? 'الملف الشخصي غير مكتمل' : 'Profil incomplet')}
-              </p>
-              {currentCustomer ? (
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono truncate" dir="ltr">
-                  {currentCustomer.phone}
+      {/* Carte « Profil incomplet » : uniquement si nom ou téléphone manquant */}
+      {!profileComplete && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-2xl border border-amber-300 dark:border-amber-500/40 shadow-xs">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-orange-400 flex items-center justify-center shrink-0">
+                <User className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black text-amber-800 dark:text-amber-400 truncate">
+                  {isArabic ? 'المعلومات ناقصة' : 'Profil incomplet'}
                 </p>
-              ) : (
-                <p className="text-[11px] text-amber-700 dark:text-orange-400">
-                  {isArabic ? 'أكمل الملف لإتمام الطلب' : 'Complétez pour finaliser'}
+                <p className="text-[11px] text-amber-700 dark:text-amber-500/90">
+                  {isArabic ? 'الاسم ورقم الهاتف مطلوبان لإتمام الطلب' : 'Nom et téléphone requis pour finaliser'}
                 </p>
-              )}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={handleCompleteProfile}
+              className="shrink-0 text-[11px] font-bold text-amber-800 dark:text-amber-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30"
+            >
+              {isArabic ? 'إكمال' : 'Compléter'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              try {
-                sessionStorage.setItem('sultan_profile_return_cart', '1');
-              } catch {
-                // ignore
-              }
-              setClientTab('profile');
-            }}
-            className="shrink-0 text-[11px] font-bold text-amber-700 dark:text-orange-400 hover:underline px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20"
-          >
-            {currentCustomer
-              ? (isArabic ? 'تعديل معلوماتي' : 'Modifier mes infos')
-              : (isArabic ? 'إكمال الملف' : 'Compléter')}
-          </button>
         </div>
-        {currentCustomer && orderType === 'delivery' && (
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 flex items-start gap-1.5 pt-0.5">
-            <MapPin className="w-3 h-3 mt-0.5 shrink-0 text-amber-600 dark:text-orange-400" />
-            <span className="leading-relaxed">
-              {currentCustomer.address || selectedAddress.address || '—'}
-              {currentCustomer.commune ? `, ${currentCustomer.commune}` : ''}
-            </span>
-          </p>
-        )}
+      )}
+
+      {/* Vos coordonnées : Nom & Prénom + Téléphone (toujours visibles) */}
+      <div className="bg-white dark:bg-[#16161a] p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-2.5">
+        <label className="text-xs font-black text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+          <User className="w-4 h-4 text-orange-500 shrink-0" />
+          <span>{isArabic ? 'معلوماتك :' : 'Vos coordonnées :'}</span>
+        </label>
+
+        <div>
+          <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 mb-1">
+            {isArabic ? 'الاسم واللقب *' : 'Nom & Prénom *'}
+          </label>
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={customerName}
+            onChange={e => {
+              setCustomerName(e.target.value);
+              if (nameError) setNameError(null);
+            }}
+            placeholder={isArabic ? 'مثال: محمد بن عمر' : 'Ex: Amine Benali'}
+            autoComplete="name"
+            className={`w-full h-11 px-3 bg-zinc-50 dark:bg-zinc-900 rounded-xl border text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-orange-500 transition ${
+              nameError
+                ? 'border-red-400 dark:border-red-500/60'
+                : 'border-zinc-300 dark:border-zinc-700'
+            }`}
+          />
+          {nameError && (
+            <p className="mt-1 text-[11px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {nameError}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 mb-1">
+            {isArabic ? 'رقم الهاتف *' : 'Téléphone *'}
+          </label>
+          <input
+            ref={phoneInputRef}
+            type="tel"
+            inputMode="tel"
+            dir="ltr"
+            value={customerPhone}
+            onChange={e => {
+              setCustomerPhone(e.target.value);
+              if (phoneError) setPhoneError(null);
+            }}
+            placeholder="05 XX XX XX XX"
+            autoComplete="tel"
+            className={`w-full h-11 px-3 bg-zinc-50 dark:bg-zinc-900 rounded-xl border text-sm font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-orange-500 transition ${
+              phoneError
+                ? 'border-red-400 dark:border-red-500/60'
+                : 'border-zinc-300 dark:border-zinc-700'
+            }`}
+          />
+          {phoneError && (
+            <p className="mt-1 text-[11px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {phoneError}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Mode Toggle: Livraison vs À emporter */}
@@ -463,12 +618,27 @@ export const ClientCart: React.FC = () => {
         </div>
       </div>
 
-      {/* CONDITIONAL STEP: Geolocation / Address required ONLY for Livraison */}
+      {/* CONDITIONAL STEP: Livraison → adresse (GPS / récente / autre) ; À emporter → créneau */}
       {orderType === 'delivery' ? (
-        <GeolocationPicker
-          initialAddress={selectedAddress}
-          onAddressSelect={setSelectedAddress}
-        />
+        <div ref={addressCardRef} className="space-y-2">
+          <GeolocationPicker
+            key={currentCustomer?.id || 'anonymous'}
+            initialAddress={{
+              address: currentCustomer?.address || '',
+              landmark: currentCustomer?.landmark || '',
+              latitude: currentCustomer?.latitude,
+              longitude: currentCustomer?.longitude,
+            }}
+            recentAddresses={currentCustomer?.recentAddresses || []}
+            onAddressSelect={handleAddressSelect}
+          />
+          {addressError && (
+            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-500/30 text-red-800 dark:text-red-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+              <span>{addressError}</span>
+            </div>
+          )}
+        </div>
       ) : (
         /* À emporter (Pickup) Slot Selector */
         <div className="bg-white dark:bg-[#16161a] p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-2.5">
@@ -502,7 +672,7 @@ export const ClientCart: React.FC = () => {
           value={kitchenNotes}
           onChange={e => setKitchenNotes(e.target.value)}
           placeholder={isArabic ? 'مثال: بدون صلصة، طهي محمر جيدا...' : 'Ex: Bien rôti, sans piquant...'}
-          className="w-full h-10 px-3 bg-zinc-50 dark:bg-zinc-900 rounded-xl border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-orange-500 transition"
+          className="w-full h-11 px-3 bg-zinc-50 dark:bg-zinc-900 rounded-xl border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-orange-500 transition"
         />
       </div>
 

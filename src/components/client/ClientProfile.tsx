@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Trash2,
   AlertTriangle,
+  Clock,
 } from 'lucide-react';
 
 const RETURN_TO_CART_FLAG = 'sultan_profile_return_cart';
@@ -49,8 +50,6 @@ export const ClientProfile: React.FC = () => {
 
   const [name, setName] = useState(currentCustomer?.name || '');
   const [phone, setPhone] = useState(currentCustomer?.phone || '');
-  const [wilaya, setWilaya] = useState(currentCustomer?.wilaya || 'Alger');
-  const [commune, setCommune] = useState(currentCustomer?.commune || 'Birkhadem');
   const [address, setAddress] = useState(currentCustomer?.address || '');
   const [landmark, setLandmark] = useState(currentCustomer?.landmark || '');
   const [mapUrl, setMapUrl] = useState(currentCustomer?.mapUrl || '');
@@ -70,13 +69,41 @@ export const ClientProfile: React.FC = () => {
   const [recoverError, setRecoverError] = useState('');
 
   const [confirmErase, setConfirmErase] = useState(false);
+  const [isRemovingRecent, setIsRemovingRecent] = useState(false);
+
+  // Supprime une adresse récente du profil (les autres sont conservées).
+  const handleRemoveRecentAddress = async (addressToRemove: string) => {
+    if (!currentCustomer) return;
+    setIsRemovingRecent(true);
+    try {
+      const remaining = (currentCustomer.recentAddresses || [])
+        .filter(recent => recent.address !== addressToRemove)
+        .slice(0, 3);
+      await saveCustomerProfile({
+        name: currentCustomer.name,
+        phone: currentCustomer.phone,
+        wilaya: currentCustomer.wilaya,
+        commune: currentCustomer.commune,
+        address: currentCustomer.address,
+        landmark: currentCustomer.landmark || undefined,
+        mapUrl: currentCustomer.mapUrl || undefined,
+        latitude: currentCustomer.latitude,
+        longitude: currentCustomer.longitude,
+        recentAddresses: remaining,
+      });
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      setFormError(err?.message || (isArabic ? 'فشل حذف العنوان.' : 'La suppression de l’adresse a échoué.'));
+    } finally {
+      setIsRemovingRecent(false);
+    }
+  };
 
   useEffect(() => {
     if (currentCustomer) {
       setName(currentCustomer.name || '');
       setPhone(currentCustomer.phone || '');
-      setWilaya(currentCustomer.wilaya || 'Alger');
-      setCommune(currentCustomer.commune || 'Birkhadem');
       setAddress(currentCustomer.address || '');
       setLandmark(currentCustomer.landmark || '');
       setMapUrl(currentCustomer.mapUrl || '');
@@ -134,10 +161,6 @@ export const ClientProfile: React.FC = () => {
       );
       return;
     }
-    if (!address.trim()) {
-      setFormError(isArabic ? 'يرجى إدخال العنوان.' : 'Veuillez saisir votre adresse.');
-      return;
-    }
     if (recoveryCode.trim() && !/^\d{4}$/.test(recoveryCode.trim())) {
       setFormError(
         isArabic ? 'رمز الاستعادة يجب أن يتكون من 4 أرقام.' : 'Le code de récupération doit contenir 4 chiffres.'
@@ -150,13 +173,16 @@ export const ClientProfile: React.FC = () => {
       await saveCustomerProfile({
         name: name.trim(),
         phone: phone.trim(),
-        wilaya: wilaya.trim() || 'Alger',
-        commune: commune.trim() || 'Birkhadem',
+        // Wilaya/commune ne sont plus saisies (Tâche C) : on conserve la
+        // valeur du profil, le serveur applique ses défauts sinon.
+        wilaya: currentCustomer?.wilaya,
+        commune: currentCustomer?.commune,
         address: address.trim(),
         landmark: landmark.trim() || undefined,
         mapUrl: mapUrl.trim() || undefined,
         latitude,
         longitude,
+        // recentAddresses non envoyé : le serveur préserve la liste existante.
         recoveryCode: recoveryCode.trim() || undefined,
       });
       setRecoveryCode('');
@@ -211,8 +237,6 @@ export const ClientProfile: React.FC = () => {
       setIsEditing(true);
       setName('');
       setPhone('');
-      setWilaya('Alger');
-      setCommune('Birkhadem');
       setAddress('');
       setLandmark('');
       setMapUrl('');
@@ -285,7 +309,7 @@ export const ClientProfile: React.FC = () => {
             <div className="flex items-start gap-2">
               <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400 shrink-0 mt-0.5" />
               <span>
-                {currentCustomer?.address || 'Birkhadem'}, {currentCustomer?.commune || 'Birkhadem'}
+                {currentCustomer?.address || (isArabic ? 'لم يتم تسجيل عنوان' : 'Aucune adresse enregistrée')}
                 {currentCustomer?.landmark ? ` (${currentCustomer.landmark})` : ''}
               </span>
             </div>
@@ -316,7 +340,40 @@ export const ClientProfile: React.FC = () => {
               <span>{t.totalSpent}: <strong className="text-amber-700 dark:text-amber-400">{currentCustomer?.totalSpent?.toLocaleString() || 0} {t.currency}</strong></span>
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {/* Adresses récentes (max 3) : issues des « Autre adresse » utilisées
+            lors de commandes précédentes ; supprimables une par une. */}
+        {hasProfile && !isEditing && (currentCustomer?.recentAddresses?.length || 0) > 0 && (
+          <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800/80 space-y-1.5">
+            <span className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              {isArabic ? 'العناوين الأخيرة :' : 'Adresses récentes :'}
+            </span>
+            {currentCustomer?.recentAddresses?.slice(0, 3).map((recent, index) => (
+              <div
+                key={`${recent.address}-${index}`}
+                className="flex items-center gap-2 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700"
+              >
+                <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-orange-400 shrink-0" />
+                <span className="flex-1 text-[11px] text-zinc-700 dark:text-zinc-300 leading-snug break-words">
+                  {recent.address}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleRemoveRecentAddress(recent.address)}
+                  disabled={isRemovingRecent}
+                  className="shrink-0 w-8 h-8 flex items-center justify-center text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition disabled:opacity-50"
+                  aria-label={isArabic ? 'حذف العنوان' : 'Supprimer cette adresse'}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(!hasProfile || isEditing) && (
           <form onSubmit={handleSaveProfile} className="pt-2 border-t border-zinc-200 dark:border-zinc-800 space-y-2.5 text-xs">
             <div>
               <label className={labelClass}>{t.fullName} *</label>
@@ -326,6 +383,7 @@ export const ClientProfile: React.FC = () => {
               <label className={labelClass}>{t.phoneNumber} *</label>
               <input
                 type="tel"
+                inputMode="tel"
                 dir="ltr"
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
@@ -333,19 +391,15 @@ export const ClientProfile: React.FC = () => {
                 className={`${inputClass} font-mono`}
               />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>{isArabic ? 'الولاية' : 'Wilaya'}</label>
-                <input type="text" value={wilaya} onChange={e => setWilaya(e.target.value)} className={inputClass} />
-              </div>
-              <div>
-                <label className={labelClass}>{t.commune}</label>
-                <input type="text" value={commune} onChange={e => setCommune(e.target.value)} className={inputClass} />
-              </div>
-            </div>
             <div>
-              <label className={labelClass}>{t.address} *</label>
-              <input type="text" value={address} onChange={e => setAddress(e.target.value)} className={inputClass} />
+              <label className={labelClass}>{isArabic ? 'العنوان (اختياري)' : 'Adresse (optionnelle)'}</label>
+              <input
+                type="text"
+                value={address}
+                onChange={e => setAddress(e.target.value)}
+                placeholder={isArabic ? 'مثال: حي البساتين، الشارع الرئيسي' : 'Ex: Quartier Les Vergers, Rue principale'}
+                className={inputClass}
+              />
             </div>
             <div>
               <label className={labelClass}>{t.landmark}</label>

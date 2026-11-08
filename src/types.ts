@@ -84,6 +84,14 @@ export interface Product {
   updatedAt?: string;
 }
 
+export interface CustomerRecentAddress {
+  address: string;
+  landmark?: string | null;
+  mapUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
 export interface Customer {
   id: string;
   name: string;
@@ -95,6 +103,7 @@ export interface Customer {
   mapUrl?: string;
   latitude?: number;
   longitude?: number;
+  recentAddresses?: CustomerRecentAddress[];
   orderCount: number;
   totalSpent: number;
   createdAt: string;

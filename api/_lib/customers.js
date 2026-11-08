@@ -79,6 +79,7 @@ export function sanitizeCustomerInput(body) {
 
   const latitude = cleanOptionalNumber(body.latitude, 'latitude', -90, 90);
   const longitude = cleanOptionalNumber(body.longitude, 'longitude', -180, 180);
+  const recentAddresses = sanitizeRecentAddresses(body.recentAddresses);
 
   let recoveryCode = undefined;
   if (body.recoveryCode !== undefined && body.recoveryCode !== null && String(body.recoveryCode).trim() !== '') {
@@ -98,8 +99,39 @@ export function sanitizeCustomerInput(body) {
     mapUrl,
     latitude,
     longitude,
+    recentAddresses,
     recoveryCode,
   };
+}
+
+// Adresses récentes : 3 maximum, dédupliquées par libellé, sans données sensibles.
+export function sanitizeRecentAddresses(rawList) {
+  if (rawList === undefined || rawList === null) return undefined;
+  if (!Array.isArray(rawList)) {
+    throw new ApiError(400, 'Le champ recentAddresses doit être une liste.', 'VALIDATION_ERROR');
+  }
+  const seen = new Set();
+  const cleaned = [];
+  for (const raw of rawList) {
+    if (cleaned.length >= 3) break;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const address = cleanTextField(raw.address, 'recentAddresses.address', { max: 300 });
+    if (!address || seen.has(address)) continue;
+    let mapUrl = cleanTextField(raw.mapUrl, 'recentAddresses.mapUrl', { max: 500 }) || null;
+    if (mapUrl && !/^https:\/\//i.test(mapUrl)) {
+      throw new ApiError(400, 'Le lien de carte doit commencer par https://', 'VALIDATION_ERROR');
+    }
+    const entry = {
+      address,
+      landmark: cleanTextField(raw.landmark, 'recentAddresses.landmark', { max: 200 }) || null,
+      mapUrl,
+      latitude: cleanOptionalNumber(raw.latitude, 'recentAddresses.latitude', -90, 90),
+      longitude: cleanOptionalNumber(raw.longitude, 'recentAddresses.longitude', -180, 180),
+    };
+    seen.add(address);
+    cleaned.push(Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== null && v !== undefined)));
+  }
+  return cleaned;
 }
 
 export function hashRecoveryCode(code) {
@@ -129,6 +161,18 @@ export function presentCustomer(row) {
     mapUrl: row.map_url || null,
     latitude: row.latitude ?? null,
     longitude: row.longitude ?? null,
+    recentAddresses: Array.isArray(row.recent_addresses)
+      ? row.recent_addresses
+          .filter((item) => item && typeof item === 'object' && typeof item.address === 'string' && item.address.trim())
+          .slice(0, 3)
+          .map((item) => ({
+            address: item.address,
+            landmark: typeof item.landmark === 'string' ? item.landmark : null,
+            mapUrl: typeof item.mapUrl === 'string' ? item.mapUrl : null,
+            latitude: typeof item.latitude === 'number' && Number.isFinite(item.latitude) ? item.latitude : null,
+            longitude: typeof item.longitude === 'number' && Number.isFinite(item.longitude) ? item.longitude : null,
+          }))
+      : [],
     hasRecoveryCode: Boolean(row.recovery_code_hash),
     orderCount: Number(row.order_count || 0),
     totalSpent: Number(row.total_spent || 0),
@@ -137,7 +181,7 @@ export function presentCustomer(row) {
   };
 }
 
-const CUSTOMER_SELECT = 'id,device_id,phone,name,wilaya,commune,address,landmark,map_url,latitude,longitude,recovery_code_hash,recovery_attempts,recovery_locked_until,order_count,total_spent,created_at,updated_at';
+const CUSTOMER_SELECT = 'id,device_id,phone,name,wilaya,commune,address,landmark,map_url,latitude,longitude,recent_addresses,recovery_code_hash,recovery_attempts,recovery_locked_until,order_count,total_spent,created_at,updated_at';
 
 export async function fetchCustomerByDeviceId(deviceId) {
   const rows = await supabaseRest(
@@ -161,6 +205,9 @@ export async function saveCustomerProfile(deviceId, input) {
     latitude: input.latitude,
     longitude: input.longitude,
   };
+  if (input.recentAddresses !== undefined) {
+    patch.recent_addresses = input.recentAddresses;
+  }
   if (input.recoveryCode !== undefined) {
     patch.recovery_code_hash = input.recoveryCode ? hashRecoveryCode(input.recoveryCode) : null;
   }

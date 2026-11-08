@@ -139,6 +139,9 @@ function mapProfileToCustomer(profile: CustomerProfile): Customer {
     mapUrl: profile.mapUrl || undefined,
     latitude: profile.latitude ?? undefined,
     longitude: profile.longitude ?? undefined,
+    recentAddresses: Array.isArray(profile.recentAddresses)
+      ? profile.recentAddresses.filter(a => a && typeof a.address === 'string' && a.address.trim())
+      : [],
     orderCount: Number(profile.orderCount || 0),
     totalSpent: Number(profile.totalSpent || 0),
     createdAt: profile.createdAt || new Date().toISOString(),
@@ -259,6 +262,8 @@ interface AppContextType {
     items?: OrderItem[];
     clientRequestId: string;
     accessToken: string;
+    customerName?: string;
+    customerPhone?: string;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -1562,14 +1567,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [clientActiveOrderId]);
 
-  // Commandes partagées : Supabase Realtime + polling de secours.
-  // Visible : 4 s ; onglet en arrière-plan : 10 s (économie batterie).
-  // Le même mécanisme sert au rattrapage après retour du réseau.
+  // Commandes partagées : Supabase Realtime pour l'instantané + polling de
+  // secours à budget maîtrisé. Un « scheduler » tick toutes les 2 s et ne
+  // déclenche un appel réseau que si le délai adaptatif est écoulé :
+  //   • staff connecté : 30 s (Realtime couvre l'instantané) ;
+  //   • client avec commande en cours : 4 s (suivi fluide) ;
+  //   • client sans commande active : 30 s ;
+  //   • onglet en arrière-plan : plancher 10 s (économie batterie/réseau) ;
+  //   • retour d'onglet visible ou retour du réseau : rafraîchissement immédiat.
   useEffect(() => {
     let isMounted = true;
+    const lastRefreshRef = { current: 0 };
 
     const refresh = () => {
-      if (isMounted) void refreshOrdersFromSupabase();
+      if (!isMounted) return;
+      lastRefreshRef.current = Date.now();
+      void refreshOrdersFromSupabase();
+    };
+
+    const desiredDelayMs = () => {
+      const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+      if (hidden) return 10_000;
+      if (getAdminToken()) return 30_000;
+      const hasActiveOrder = ordersSnapshotRef.current.some(
+        o => o.status !== 'delivered' && o.status !== 'cancelled'
+      );
+      return hasActiveOrder ? 4_000 : 30_000;
     };
 
     refresh();
@@ -1579,16 +1602,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       onChange: refresh,
     });
 
-    let pollInterval = setInterval(refresh, 4000);
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        clearInterval(pollInterval);
-        pollInterval = setInterval(refresh, 4000);
+    const tick = setInterval(() => {
+      if (Date.now() - lastRefreshRef.current >= desiredDelayMs()) {
         refresh();
-      } else {
-        clearInterval(pollInterval);
-        pollInterval = setInterval(refresh, 10000);
       }
+    }, 2000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
     };
 
     window.addEventListener('online', refresh);
@@ -1596,7 +1617,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     return () => {
       isMounted = false;
-      clearInterval(pollInterval);
+      clearInterval(tick);
       window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', handleVisibility);
       unsubscribe();
@@ -1606,7 +1627,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Catalogue partagé Supabase : chargement public pour les clients, bootstrap
   // unique depuis le navigateur Gérant, puis polling léger par version. Une
   // photo publiée par le gérant apparaît donc aussi dans un autre navigateur
-  // ou sur un autre appareil, sans dépendre de son localStorage.
+  // ou sur un autre appareil, sans dépendre de son localStorage. Polling allégé
+  // à 30 s (budget gratuit : Realtime et publications instantanées côté éditeur).
   useEffect(() => {
     let isMounted = true;
 
@@ -1615,7 +1637,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     refresh();
-    const pollInterval = setInterval(refresh, 2000);
+    const pollInterval = setInterval(refresh, 30000);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') refresh();
     };
@@ -1694,7 +1716,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   // Réglages client (sons, textes d'étape) : chargement public + rafraîchissement
-  // léger toutes les 30 s. Le Gérant les modifie depuis les Paramètres.
+  // léger toutes les 2 min (ces réglages changent rarement). Le Gérant les
+  // modifie depuis les Paramètres.
   const refreshClientSettings = useCallback(async () => {
     try {
       const res = await fetch('/api/client-settings', { headers: { Accept: 'application/json' } });
@@ -1719,7 +1742,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     void refreshClientSettings();
-    const interval = setInterval(() => void refreshClientSettings(), 30000);
+    const interval = setInterval(() => void refreshClientSettings(), 120000);
     const onVisibility = () => {
       if (document.visibilityState === 'visible') void refreshClientSettings();
     };
@@ -1939,7 +1962,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     void refreshCustomersFromServer();
-    const interval = setInterval(() => void refreshCustomersFromServer(), 30000);
+    // Rafraîchissement allégé à 2 min : la liste Clients évolue peu, et ce
+    // polling tourne sur chaque écran staff connecté (budget gratuit).
+    const interval = setInterval(() => void refreshCustomersFromServer(), 120000);
     return () => clearInterval(interval);
   }, [refreshCustomersFromServer]);
 
@@ -2216,6 +2241,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     items: requestedItems,
     clientRequestId,
     accessToken,
+    customerName,
+    customerPhone,
     deliveryAddress,
     pickupTimeSlot,
     kitchenNotes,
@@ -2224,6 +2251,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     items?: OrderItem[];
     clientRequestId: string;
     accessToken: string;
+    customerName?: string;
+    customerPhone?: string;
     deliveryAddress?: {
       wilaya: string;
       commune: string;
@@ -2262,25 +2291,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       );
     }
 
-    // Le profil de cet appareil est obligatoire : sans profil, l'UI redirige
-    // vers le formulaire avant d'atteindre ce point (plus de client invité
-    // anonyme, chaque commande est rattachée au device_id du profil).
-    if (!currentCustomer) {
+    // Nom et téléphone viennent du formulaire Panier (Tâche C) avec le profil
+    // en repli : plus besoin d'un profil complet pour commander.
+    const resolvedName = String(customerName || currentCustomer?.name || '').trim();
+    const resolvedPhone = String(customerPhone || currentCustomer?.phone || '')
+      .replace(/[\s.-]/g, '');
+
+    if (resolvedName.length < 2 || !/^(05|06|07)\d{8}$/.test(resolvedPhone)) {
       throw new Error(
         language === 'ar'
-          ? 'يرجى إكمال الملف الشخصي قبل تأكيد الطلب.'
-          : 'Veuillez compléter votre profil avant de confirmer la commande.'
+          ? 'يرجى إدخال الاسم ورقم هاتف صحيح (05/06/07 + 8 أرقام).'
+          : 'Veuillez renseigner un nom et un téléphone valide (05/06/07 + 8 chiffres).'
       );
     }
-    const customer = currentCustomer;
 
     const { order: serverOrder } = await createOrderRemote({
       clientRequestId,
       accessToken,
       deviceId: getDeviceId(),
-      customerId: customer.id,
-      customerName: customer.name,
-      customerPhone: customer.phone,
+      customerId: currentCustomer?.id,
+      customerName: resolvedName,
+      customerPhone: resolvedPhone,
       type,
       source: 'app',
       items,
